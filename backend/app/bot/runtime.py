@@ -5,6 +5,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 
+from app.bot.group_handlers import router as group_router
 from app.bot.handlers import router
 from app.services import AppServices
 
@@ -16,6 +17,7 @@ class BotRuntime:
         self.bot = Bot(token=token)
         self.dispatcher = Dispatcher()
         self.dispatcher.include_router(router)
+        self.dispatcher.include_router(group_router)
         self.services = services
         self.task: asyncio.Task[None] | None = None
 
@@ -27,6 +29,13 @@ class BotRuntime:
                 BotCommand(command="stats", description="Статистика за все время"),
                 BotCommand(command="week", description="Текущая неделя"),
                 BotCommand(command="pr", description="Личные результаты"),
+                BotCommand(command="privacy", description="Настройки приватности"),
+                BotCommand(command="share", description="Sharing для группы"),
+                BotCommand(command="setup_group", description="Настроить беговую группу"),
+                BotCommand(command="join", description="Вступить в беговую группу"),
+                BotCommand(command="leave", description="Покинуть беговую группу"),
+                BotCommand(command="leaderboard", description="Рейтинг группы"),
+                BotCommand(command="streaks", description="Серии по неделям"),
                 BotCommand(command="help", description="Помощь"),
             ]
         )
