@@ -41,7 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await runtime.stop()
             await engine.dispose()
 
-    app = FastAPI(title=resolved_settings.app_name, version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title=resolved_settings.app_name, version="0.2.0", lifespan=lifespan)
     app.include_router(health_router)
     return app
 

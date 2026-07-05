@@ -2,9 +2,10 @@
 
 Self-hosted Telegram-бот и backend для учета беговых тренировок, аналитики и рекомендаций.
 
-Сейчас реализуется **MVP 0.1**: ручной ввод пробежек через Telegram, PostgreSQL,
-детерминированная статистика и отчет после тренировки. Границы следующих итераций
-зафиксированы отдельно, чтобы над проектом могли последовательно работать разные агенты.
+Реализован **MVP 0.2**: ручной ввод пробежек, privacy-aware Telegram-группы,
+явное разрешение публикаций, недельный leaderboard и streaks. Границы следующих
+итераций зафиксированы отдельно, чтобы над проектом могли последовательно работать
+разные агенты.
 
 ## Документация
 
@@ -12,7 +13,7 @@ Self-hosted Telegram-бот и backend для учета беговых трен
 - [Roadmap](docs/roadmap.md)
 - [Инструкция для следующего агента](docs/agent-handoff.md)
 - [Журнал решений](docs/decision-log.md)
-- [Спецификация MVP 0.1](docs/iterations/mvp-0.1.md)
+- [Спецификация MVP 0.2](docs/iterations/mvp-0.2.md)
 - [Спецификации следующих MVP](docs/iterations/)
 - [Локальный запуск](docs/deployment.md)
 
@@ -31,4 +32,10 @@ curl http://localhost:8000/health
 curl http://localhost:8000/ready
 ```
 
-Команды бота: `/start`, `/run 10.02 1:02:41`, `/stats`, `/week`, `/pr`, `/help`.
+Личные команды: `/start`, `/run 10.02 1:02:41`, `/stats`, `/week`, `/pr`,
+`/privacy [on|off]`, `/share <chat_id> <none|summary|detailed>`, `/help`.
+
+Команды в Telegram-группе: `/setup_group` (только Telegram admin/owner), `/join`,
+`/leave`, `/week`, `/leaderboard`, `/streaks`. После `/run` бот предлагает отдельное
+разрешение «Да/Нет/Всегда» для каждой группы. Без opt-in активность остается private и
+не учитывается в групповой статистике.
