@@ -1,0 +1,1 @@
+"""Running activities application module."""
