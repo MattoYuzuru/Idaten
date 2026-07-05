@@ -1,4 +1,4 @@
-# Локальный запуск и deployment MVP 0.1
+# Локальный запуск и deployment MVP 0.2
 
 ## Требования
 
@@ -25,6 +25,10 @@ docker compose logs -f backend
 Backend перед стартом применяет `alembic upgrade head`, затем FastAPI lifespan запускает
 polling. Одновременно должен работать только один polling instance.
 
+Для группового сценария пользователь сначала выполняет `/start` в личном чате. Затем
+Telegram admin/owner выполняет `/setup_group` в группе, участники — `/join`, а sharing
+настраивается в личном чате через `/privacy` и `/share`. По умолчанию sharing выключен.
+
 ## Остановка и данные
 
 ```bash
@@ -47,5 +51,5 @@ pip install -e '.[dev]'
 ruff check .
 mypy app
 pytest
+alembic check
 ```
-
