@@ -73,7 +73,7 @@ LLM, планы, scheduler и публикации.
 - [x] Автотесты
 - [x] Container smoke test
 - [x] Документация запуска
-- [ ] Draft PR
+- [x] Draft PR
 
 ## Known limitations
 
