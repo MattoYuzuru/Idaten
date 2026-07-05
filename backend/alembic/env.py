@@ -8,6 +8,7 @@ from alembic import context
 from app.activities import models as activity_models  # noqa: F401
 from app.core.config import get_settings
 from app.db.base import Base
+from app.groups import models as group_models  # noqa: F401
 from app.users import models as user_models  # noqa: F401
 
 config = context.config

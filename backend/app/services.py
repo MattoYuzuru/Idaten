@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.activities.service import ActivityService
 from app.core.config import Settings
+from app.groups.service import GroupService
 from app.users.service import UserService
 
 
@@ -11,6 +12,7 @@ from app.users.service import UserService
 class AppServices:
     users: UserService
     activities: ActivityService
+    groups: GroupService
 
 
 def build_services(
@@ -21,4 +23,8 @@ def build_services(
         default_timezone=settings.default_timezone,
         default_locale=settings.default_locale,
     )
-    return AppServices(users=users, activities=ActivityService(session_factory, users))
+    return AppServices(
+        users=users,
+        activities=ActivityService(session_factory, users),
+        groups=GroupService(session_factory),
+    )
