@@ -58,4 +58,5 @@ private Telegram outbox. Group source policy по-прежнему допуск�
   instrumentation не запускался без emulator/device с Health Connect provider.
 - Docker: image build, clean Compose health/ready, Alembic и StorageService persistence
   после backend restart прошли.
-- GitHub CI: состояние проверяется в PR #4; при передаче работы смотреть последний run.
+- GitHub CI run `28823749082`: `backend`, `image`, `android` прошли. Финальное состояние
+  doc-only handoff update смотреть в последнем run PR #4.
