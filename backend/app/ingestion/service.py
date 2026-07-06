@@ -113,6 +113,14 @@ class ImportService:
         digest = hashlib.sha256(content).hexdigest()
         existing = await self._existing_import(user.id, digest)
         if existing is not None:
+            if existing.status == ImportStatus.CANCELLED and existing.normalized_json is not None:
+                async with self.session_factory.begin() as session:
+                    cancelled = await ImportRepository(session).get_import(
+                        existing.id, user.id, for_update=True
+                    )
+                    if cancelled is not None and cancelled.status == ImportStatus.CANCELLED:
+                        cancelled.status = ImportStatus.PREVIEW
+                return await self.preview(user.id, existing.id)
             return await self._preview(existing, user.id)
 
         stored = await self.storage.save("raw", content, safe.raw_suffix)
@@ -191,6 +199,10 @@ class ImportService:
     ) -> ConfirmedImport:
         async with self.session_factory.begin() as session:
             user = await self._require_user(session, telegram_user_id)
+            locked_user = await UserRepository(session).get_by_id_for_update(user.id)
+            if locked_user is None:
+                raise ImportError("Пользователь не найден.", code="USER_NOT_FOUND")
+            user = locked_user
             repository = ImportRepository(session)
             record = await repository.get_import(import_id, user.id, for_update=True)
             if record is None:

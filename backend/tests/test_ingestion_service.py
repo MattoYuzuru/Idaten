@@ -214,3 +214,25 @@ async def test_parser_failure_is_diagnosable_without_payload_leak(
     assert "SECRET" not in (record.error_message or "")
     history = await services.imports.history(42)
     assert history[0].error_code == "GPX_PARSE_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_hash_can_be_reopened_without_new_artifact(
+    import_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, session_factory = import_context
+    preview = await services.imports.upload_for_telegram(
+        identity(), filename="run.gpx", media_type="application/gpx+xml", content=GPX
+    )
+    await services.imports.cancel(42, preview.import_id)
+
+    reopened = await services.imports.upload_for_user(
+        42, filename="renamed.gpx", media_type="application/gpx+xml", content=GPX
+    )
+
+    assert reopened.import_id == preview.import_id
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count(RawArtifact.id))) == 1
+        record = await session.get(ActivityImport, preview.import_id)
+    assert record is not None
+    assert record.status == ImportStatus.PREVIEW

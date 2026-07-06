@@ -96,6 +96,9 @@ def _extract_archive(
         selected = supported[0]
         if selected.file_size > max_uncompressed_bytes:
             raise ImportError("ZIP превышает допустимый размер.", code="ZIP_SIZE_LIMIT")
-        extracted = archive.read(selected)
+        try:
+            extracted = archive.read(selected)
+        except (RuntimeError, zipfile.BadZipFile) as error:
+            raise ImportError("ZIP не удалось безопасно прочитать.", code="INVALID_ZIP") from error
         suffix = PurePath(selected.filename).suffix.lower()
         return extracted, suffix
