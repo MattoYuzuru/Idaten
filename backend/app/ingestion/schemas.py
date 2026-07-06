@@ -27,6 +27,8 @@ class TrackPoint:
     longitude: float | None = None
     elevation_m: float | None = None
     heart_rate: int | None = None
+    speed_mps: float | None = None
+    cadence_spm: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

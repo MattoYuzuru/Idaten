@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.health import router as health_router
+from app.api.health_connect import router as health_connect_router
 from app.api.imports import router as imports_router
 from app.bot.runtime import BotRuntime
 from app.core.config import Settings, get_settings
@@ -31,7 +32,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         runtime: BotRuntime | None = None
         if resolved_settings.bot_token:
-            runtime = BotRuntime(resolved_settings.bot_token, services)
+            runtime = BotRuntime(
+                resolved_settings.bot_token,
+                services,
+                outbox_poll_seconds=resolved_settings.outbox_poll_seconds,
+            )
             await runtime.start()
         else:
             logger.warning("TELEGRAM_BOT_TOKEN is empty; polling is disabled")
@@ -43,9 +48,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await runtime.stop()
             await engine.dispose()
 
-    app = FastAPI(title=resolved_settings.app_name, version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title=resolved_settings.app_name, version="0.4.0", lifespan=lifespan)
     app.include_router(health_router)
     app.include_router(imports_router)
+    app.include_router(health_connect_router)
     return app
 
 

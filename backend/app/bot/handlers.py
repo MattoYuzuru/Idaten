@@ -20,6 +20,7 @@ from app.bot.messages import (
 )
 from app.groups.models import ShareLevel
 from app.groups.schemas import GroupError, ShareTarget
+from app.health_connect.schemas import HealthConnectError
 from app.ingestion.schemas import ImportError, ImportPreview
 from app.services import AppServices
 from app.users.schemas import TelegramIdentity
@@ -126,6 +127,59 @@ async def imports_history(message: Message, services: AppServices) -> None:
         await message.answer(str(error))
         return
     await message.answer(format_import_history(result))
+
+
+@router.message(Command("link"))
+async def link_health_connect(message: Message, services: AppServices) -> None:
+    try:
+        result = await services.health_connect.start_link_for_identity(
+            identity_from_message(message)
+        )
+    except (ActivityInputError, HealthConnectError) as error:
+        await message.answer(str(error))
+        return
+    await message.answer(
+        "Код для Android: "
+        f"{result.code}\nКод одноразовый и действует до {result.expires_at:%H:%M UTC}."
+    )
+
+
+@router.message(Command("devices"))
+async def health_connect_devices(message: Message, services: AppServices) -> None:
+    try:
+        devices = await services.health_connect.devices_for_user(
+            identity_from_message(message).telegram_user_id
+        )
+    except (ActivityInputError, HealthConnectError) as error:
+        await message.answer(str(error))
+        return
+    if not devices:
+        await message.answer("Связанных Android-устройств нет.")
+        return
+    lines = [
+        f"{device.device_id} · {device.name} · {'отозвано' if device.revoked else 'активно'}"
+        for device in devices
+    ]
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("revoke_device"))
+async def revoke_health_connect_device(
+    message: Message, command: CommandObject, services: AppServices
+) -> None:
+    try:
+        device_id = uuid.UUID((command.args or "").strip())
+    except ValueError:
+        await message.answer("Формат: /revoke_device <device_uuid>")
+        return
+    try:
+        await services.health_connect.revoke_for_user(
+            identity_from_message(message).telegram_user_id, device_id
+        )
+    except (ActivityInputError, HealthConnectError) as error:
+        await message.answer(str(error))
+        return
+    await message.answer("Device token отозван.")
 
 
 @router.message(F.document)

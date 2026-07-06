@@ -13,13 +13,15 @@ logger = logging.getLogger(__name__)
 
 
 class BotRuntime:
-    def __init__(self, token: str, services: AppServices) -> None:
+    def __init__(self, token: str, services: AppServices, *, outbox_poll_seconds: int = 5) -> None:
         self.bot = Bot(token=token)
         self.dispatcher = Dispatcher()
         self.dispatcher.include_router(router)
         self.dispatcher.include_router(group_router)
         self.services = services
+        self.outbox_poll_seconds = outbox_poll_seconds
         self.task: asyncio.Task[None] | None = None
+        self.outbox_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await self.bot.set_my_commands(
@@ -37,6 +39,9 @@ class BotRuntime:
                 BotCommand(command="leaderboard", description="Рейтинг группы"),
                 BotCommand(command="streaks", description="Серии по неделям"),
                 BotCommand(command="imports", description="История импортов"),
+                BotCommand(command="link", description="Связать Android Health Connect"),
+                BotCommand(command="devices", description="Связанные Android-устройства"),
+                BotCommand(command="revoke_device", description="Отозвать Android token"),
                 BotCommand(command="help", description="Помощь"),
             ]
         )
@@ -49,6 +54,7 @@ class BotRuntime:
             ),
             name="telegram-polling",
         )
+        self.outbox_task = asyncio.create_task(self._outbox_loop(), name="telegram-outbox")
         logger.info("Telegram polling started")
 
     async def stop(self) -> None:
@@ -56,5 +62,21 @@ class BotRuntime:
             self.task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.task
+        if self.outbox_task is not None:
+            self.outbox_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.outbox_task
         await self.bot.session.close()
         logger.info("Telegram polling stopped")
+
+    async def _outbox_loop(self) -> None:
+        while True:
+            try:
+                await self.services.outbox.deliver_pending(self._send_private_message)
+            except Exception:
+                logger.exception("Telegram outbox poll failed")
+            await asyncio.sleep(self.outbox_poll_seconds)
+
+    async def _send_private_message(self, chat_id: int, text: str) -> int:
+        sent = await self.bot.send_message(chat_id, text)
+        return sent.message_id
