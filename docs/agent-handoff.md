@@ -45,3 +45,17 @@ NormalizedActivity validation, PRIVATE activities, StorageService series и dura
 private Telegram outbox. Group source policy по-прежнему допускает только MANUAL.
 Следующая итерация после merge MVP 0.4 начинает чтение с
 `docs/iterations/mvp-0.5.md` и не должна расширять этот PR ее scope.
+
+## Публикация MVP 0.4
+
+- Ветка: `codex/mvp-0.4-health-connect`.
+- Draft PR: https://github.com/MattoYuzuru/Idaten/pull/4
+- Логические коммиты: `79726f2` backend/security/migration, `fc2c27a` Android/CI,
+  `e8aaf56` docs, `ad43cf6` Gradle wrapper line endings.
+- Backend: Ruff format/lint, strict mypy, 54 pytest, clean PostgreSQL migration,
+  downgrade/upgrade и Alembic check прошли.
+- Android: Spotless, unit tests, assembleDebug и lintDebug прошли на SDK 36;
+  instrumentation не запускался без emulator/device с Health Connect provider.
+- Docker: image build, clean Compose health/ready, Alembic и StorageService persistence
+  после backend restart прошли.
+- GitHub CI: состояние проверяется в PR #4; при передаче работы смотреть последний run.
