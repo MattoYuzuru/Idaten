@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime
+from io import BytesIO
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
@@ -10,6 +11,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.activities.schemas import ActivityInputError, parse_run_command
 from app.bot.messages import (
     HELP_TEXT,
+    format_import_history,
+    format_import_preview,
     format_personal_records,
     format_privacy,
     format_share_level,
@@ -17,6 +20,7 @@ from app.bot.messages import (
 )
 from app.groups.models import ShareLevel
 from app.groups.schemas import GroupError, ShareTarget
+from app.ingestion.schemas import ImportError, ImportPreview
 from app.services import AppServices
 from app.users.schemas import TelegramIdentity
 
@@ -114,6 +118,41 @@ async def personal_records(message: Message, services: AppServices) -> None:
     await message.answer(format_personal_records(result))
 
 
+@router.message(Command("imports"))
+async def imports_history(message: Message, services: AppServices) -> None:
+    try:
+        result = await services.imports.history(identity_from_message(message).telegram_user_id)
+    except (ActivityInputError, ImportError) as error:
+        await message.answer(str(error))
+        return
+    await message.answer(format_import_history(result))
+
+
+@router.message(F.document)
+async def upload_document(message: Message, services: AppServices) -> None:
+    document = message.document
+    if document is None:
+        return
+    bot = message.bot
+    if bot is None:
+        await message.answer("Telegram bot недоступен.")
+        return
+    try:
+        services.imports.validate_declared_size(document.file_size)
+        buffer = BytesIO()
+        await bot.download(document, destination=buffer)
+        preview = await services.imports.upload_for_telegram(
+            identity_from_message(message),
+            filename=document.file_name or "activity",
+            media_type=document.mime_type,
+            content=buffer.getvalue(),
+        )
+    except (ActivityInputError, ImportError, TelegramAPIError) as error:
+        await message.answer(str(error))
+        return
+    await message.answer(format_import_preview(preview), reply_markup=_import_keyboard(preview))
+
+
 @router.message(Command("privacy"))
 async def privacy(message: Message, command: CommandObject, services: AppServices) -> None:
     try:
@@ -193,6 +232,33 @@ async def share_callback(callback: CallbackQuery, services: AppServices) -> None
     await callback.answer("Пробежка опубликована.")
 
 
+@router.callback_query(F.data.startswith("imp:"))
+async def import_callback(callback: CallbackQuery, services: AppServices) -> None:
+    if callback.data is None:
+        await callback.answer("Некорректный callback.", show_alert=True)
+        return
+    try:
+        action, import_id = _parse_import_callback(callback.data)
+        if action == "n":
+            await services.imports.cancel(callback.from_user.id, import_id)
+            await callback.answer("Импорт отменен.")
+            return
+        result = await services.imports.confirm(
+            callback.from_user.id,
+            import_id,
+            accept_possible_duplicate=action == "f",
+        )
+    except (ImportError, ValueError) as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    if callback.message is not None:
+        if result.report_message:
+            await callback.message.answer(result.report_message)
+        else:
+            await callback.message.answer("Эта активность уже была импортирована.")
+    await callback.answer("Импорт подтвержден.")
+
+
 def _share_keyboard(
     targets: tuple[ShareTarget, ...], activity_id: uuid.UUID
 ) -> InlineKeyboardMarkup:
@@ -224,6 +290,28 @@ def _parse_share_callback(value: str) -> tuple[str, int, uuid.UUID]:
     if prefix != "shr" or action not in {"y", "n", "a"}:
         raise ValueError("Некорректное действие.")
     return action, int(chat_id), uuid.UUID(hex=activity_hex)
+
+
+def _import_keyboard(preview: ImportPreview) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(text="Подтвердить", callback_data=f"imp:y:{preview.import_id.hex}"),
+        InlineKeyboardButton(text="Отмена", callback_data=f"imp:n:{preview.import_id.hex}"),
+    ]
+    if preview.duplicate_candidates:
+        buttons.insert(
+            1,
+            InlineKeyboardButton(
+                text="Сохранить всё равно", callback_data=f"imp:f:{preview.import_id.hex}"
+            ),
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def _parse_import_callback(value: str) -> tuple[str, uuid.UUID]:
+    prefix, action, import_hex = value.split(":", maxsplit=2)
+    if prefix != "imp" or action not in {"y", "n", "f"}:
+        raise ValueError("Некорректное действие импорта.")
+    return action, uuid.UUID(hex=import_hex)
 
 
 async def _publish(

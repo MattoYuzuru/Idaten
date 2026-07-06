@@ -2,6 +2,7 @@ from app.activities.schemas import ActivitySummary, AggregateStats, PersonalReco
 from app.analytics.metrics import format_duration
 from app.groups.models import ShareLevel
 from app.groups.schemas import GroupWeek, LeaderboardEntry, PrivacyOverview, StreakEntry
+from app.ingestion.schemas import ImportHistoryItem, ImportPreview
 
 HELP_TEXT = """Idaten сохраняет и анализирует ваши пробежки.
 
@@ -11,6 +12,7 @@ HELP_TEXT = """Idaten сохраняет и анализирует ваши пр
 /pr — лучшие зарегистрированные 5K и 10K
 /privacy [on|off] — настройки приватности
 /share <chat_id> <none|summary|detailed> — sharing для группы
+/imports — история импортов
 /help — эта справка"""
 
 
@@ -79,3 +81,29 @@ def format_streaks(entries: tuple[StreakEntry, ...]) -> str:
     return "Streaks\n\n" + "\n".join(
         f"{entry.display_name} — {entry.weeks} нед." for entry in entries
     )
+
+
+def format_import_preview(preview: ImportPreview) -> str:
+    duplicate = ""
+    if preview.exact_duplicate_activity_id is not None:
+        duplicate = "\nТочный дубликат уже сохраненной активности."
+    elif preview.duplicate_candidates:
+        duplicate = f"\nНайдено похожих активностей: {len(preview.duplicate_candidates)}."
+    return (
+        f"Черновик {preview.source_type.value}\n\n"
+        f"Дистанция: {preview.distance_m / 1000:.2f} км\n"
+        f"Время: {format_duration(preview.elapsed_time_sec)}\n"
+        f"Старт: {preview.started_at.isoformat()}"
+        f"{duplicate}\n\nДо подтверждения активность не сохранена."
+    )
+
+
+def format_import_history(items: tuple[ImportHistoryItem, ...]) -> str:
+    if not items:
+        return "История импортов пуста."
+    lines = [
+        f"{item.filename} — {item.status}"
+        + (f" ({item.source_type.value})" if item.source_type else "")
+        for item in items
+    ]
+    return "Последние импорты\n\n" + "\n".join(lines)
