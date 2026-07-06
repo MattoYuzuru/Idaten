@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.activities.models import (
     Activity,
-    ActivityType,
     ActivityVisibility,
     CoachReport,
     ReportType,
@@ -25,6 +24,8 @@ from app.analytics.metrics import (
     local_week_bounds,
 )
 from app.coach.report_builder import build_after_run_report
+from app.ingestion.adapters.manual import ManualAdapter
+from app.ingestion.schemas import validate_normalized
 from app.users.models import User
 from app.users.repository import UserRepository
 from app.users.schemas import TelegramIdentity
@@ -44,8 +45,10 @@ class ActivityService:
         self, identity: TelegramIdentity, run: ManualRunInput
     ) -> RecordedRun:
         user = await self.user_service.register(identity)
-        pace = calculate_pace_sec_per_km(run.distance_m, run.elapsed_time_sec)
-        speed = calculate_speed_mps(run.distance_m, run.elapsed_time_sec)
+        normalized = ManualAdapter().normalize(run, user.timezone)
+        validate_normalized(normalized)
+        pace = calculate_pace_sec_per_km(normalized.distance_m, normalized.elapsed_time_sec)
+        speed = calculate_speed_mps(normalized.distance_m, normalized.elapsed_time_sec)
 
         async with self.session_factory.begin() as session:
             repository = ActivityRepository(session)
@@ -54,11 +57,11 @@ class ActivityService:
                 user_id=user.id,
                 source_id=source.id,
                 source_type=SourceType.MANUAL,
-                activity_type=ActivityType.RUN,
-                started_at=run.started_at,
-                timezone=user.timezone,
-                distance_m=run.distance_m,
-                elapsed_time_sec=run.elapsed_time_sec,
+                activity_type=normalized.activity_type,
+                started_at=normalized.started_at,
+                timezone=normalized.timezone,
+                distance_m=normalized.distance_m,
+                elapsed_time_sec=normalized.elapsed_time_sec,
                 avg_pace_sec_per_km=pace,
                 avg_speed_mps=speed,
                 visibility=ActivityVisibility.PRIVATE,
@@ -71,7 +74,7 @@ class ActivityService:
                 elapsed_time_sec=activity.elapsed_time_sec,
                 avg_pace_sec_per_km=activity.avg_pace_sec_per_km,
             )
-            week_start, week_end = local_week_bounds(run.started_at, user.timezone)
+            week_start, week_end = local_week_bounds(normalized.started_at, user.timezone)
             week_stats = await repository.aggregate(
                 user.id, started_from=week_start, started_before=week_end
             )
