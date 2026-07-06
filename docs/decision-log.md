@@ -49,3 +49,13 @@
 - Решение: Telegram handlers используют application services. Расчет пейса, статистики,
   границ недели, PR и отчетов находится вне bot package.
 
+## ADR-007 — закрытый HTTP import endpoint в MVP 0.3
+
+- Дата: 2026-07-06
+- Статус: принято
+- Решение: multipart import API отключен, пока не задан `IMPORT_API_TOKEN`. Клиент
+  передает shared token в `X-Idaten-Import-Token` и существующий Telegram user ID в
+  `X-Telegram-User-Id`. Telegram flow использует тот же application service без HTTP.
+- Причина: в MVP 0.3 нет отдельной account/session authentication, но endpoint нельзя
+  оставлять публичным. Shared token ограничивает endpoint для доверенной локальной
+  интеграции; полноценная пользовательская авторизация остается отдельным будущим scope.

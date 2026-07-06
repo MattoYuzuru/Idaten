@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.health import router as health_router
+from app.api.imports import router as imports_router
 from app.bot.runtime import BotRuntime
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
@@ -26,6 +27,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.services = services
+        app.state.settings = resolved_settings
 
         runtime: BotRuntime | None = None
         if resolved_settings.bot_token:
@@ -41,8 +43,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await runtime.stop()
             await engine.dispose()
 
-    app = FastAPI(title=resolved_settings.app_name, version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title=resolved_settings.app_name, version="0.3.0", lifespan=lifespan)
     app.include_router(health_router)
+    app.include_router(imports_router)
     return app
 
 

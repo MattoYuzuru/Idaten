@@ -1,7 +1,16 @@
 import uuid
+from datetime import UTC, datetime
 
-from app.bot.handlers import _parse_share_callback, _share_callback_data, _share_keyboard
+from app.activities.models import SourceType
+from app.bot.handlers import (
+    _import_keyboard,
+    _parse_import_callback,
+    _parse_share_callback,
+    _share_callback_data,
+    _share_keyboard,
+)
 from app.groups.schemas import ShareTarget
+from app.ingestion.schemas import ImportPreview
 
 
 def test_share_callback_data_fits_telegram_limit_and_round_trips() -> None:
@@ -35,4 +44,28 @@ def test_share_keyboard_has_explicit_choices_for_each_group() -> None:
     assert [[button.text for button in row] for row in keyboard.inline_keyboard] == [
         ["Да · First", "Нет", "Всегда"],
         ["Да · Second", "Нет", "Всегда"],
+    ]
+
+
+def test_import_callback_fits_telegram_limit_and_force_requires_candidate() -> None:
+    import_id = uuid.uuid4()
+    preview = ImportPreview(
+        import_id=import_id,
+        source_type=SourceType.GPX,
+        started_at=datetime(2026, 7, 6, tzinfo=UTC),
+        distance_m=5_000,
+        elapsed_time_sec=1_800,
+        title=None,
+        duplicate_candidates=(),
+    )
+
+    keyboard = _import_keyboard(preview)
+    callback_data = keyboard.inline_keyboard[0][0].callback_data
+
+    assert callback_data is not None
+    assert len(callback_data.encode()) <= 64
+    assert _parse_import_callback(callback_data) == ("y", import_id)
+    assert [button.text for button in keyboard.inline_keyboard[0]] == [
+        "Подтвердить",
+        "Отмена",
     ]

@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +20,12 @@ class UserRepository:
         )
         row = (await self.session.execute(statement)).one_or_none()
         return (row[0], row[1]) if row else None
+
+    async def get_by_id_for_update(self, user_id: uuid.UUID) -> User | None:
+        result = await self.session.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
 
     def add_user(self, user: User) -> None:
         self.session.add(user)

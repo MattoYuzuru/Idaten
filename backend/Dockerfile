@@ -6,7 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN groupadd --system idaten && useradd --system --gid idaten --home-dir /app idaten
+RUN groupadd --system idaten \
+    && useradd --system --gid idaten --home-dir /app idaten \
+    && mkdir -p /data/idaten \
+    && chown idaten:idaten /data/idaten
 
 COPY pyproject.toml ./
 COPY app ./app

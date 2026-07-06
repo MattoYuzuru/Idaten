@@ -26,11 +26,19 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Moscow}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      STORAGE_PATH: ${STORAGE_PATH:-/data/idaten}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
+      MAX_ARCHIVE_UNCOMPRESSED_BYTES: ${MAX_ARCHIVE_UNCOMPRESSED_BYTES:-52428800}
+      MAX_ARCHIVE_ENTRIES: ${MAX_ARCHIVE_ENTRIES:-10}
+      MAX_ARCHIVE_RATIO: ${MAX_ARCHIVE_RATIO:-100}
+      IMPORT_API_TOKEN: ${IMPORT_API_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "8000:8000"
+    volumes:
+      - activity_storage:/data/idaten
     healthcheck:
       test:
         [
@@ -50,3 +58,4 @@ services:
 
 volumes:
   postgres_data:
+  activity_storage:

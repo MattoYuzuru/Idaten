@@ -36,6 +36,7 @@ class BotRuntime:
                 BotCommand(command="leave", description="Покинуть беговую группу"),
                 BotCommand(command="leaderboard", description="Рейтинг группы"),
                 BotCommand(command="streaks", description="Серии по неделям"),
+                BotCommand(command="imports", description="История импортов"),
                 BotCommand(command="help", description="Помощь"),
             ]
         )
