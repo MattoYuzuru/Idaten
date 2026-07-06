@@ -2,9 +2,10 @@
 
 Self-hosted Telegram-бот и backend для учета беговых тренировок, аналитики и рекомендаций.
 
-Реализован **MVP 0.3**: ручной ввод, privacy-aware Telegram-группы и безопасный импорт
-GPX/TCX/FIT/CSV с preview, explicit confirm, deduplication и persistent local storage.
-Границы следующих итераций зафиксированы отдельно.
+Реализован **MVP 0.4**: Android companion вручную синхронизирует беговые тренировки
+из Health Connect через one-time Telegram linking. Backend использует scoped revocable
+device token, PRIVATE-by-default ingestion, persistent series storage и durable private
+Telegram report outbox. Файловый import и privacy/source policy MVP 0.3 сохранены.
 
 ## Документация
 
@@ -12,7 +13,7 @@ GPX/TCX/FIT/CSV с preview, explicit confirm, deduplication и persistent local 
 - [Roadmap](docs/roadmap.md)
 - [Инструкция для следующего агента](docs/agent-handoff.md)
 - [Журнал решений](docs/decision-log.md)
-- [Спецификация MVP 0.3](docs/iterations/mvp-0.3.md)
+- [Спецификация MVP 0.4](docs/iterations/mvp-0.4.md)
 - [Спецификации следующих MVP](docs/iterations/)
 - [Локальный запуск](docs/deployment.md)
 
@@ -32,7 +33,11 @@ curl http://localhost:8000/ready
 ```
 
 Личные команды: `/start`, `/run 10.02 1:02:41`, `/stats`, `/week`, `/pr`,
-`/privacy [on|off]`, `/share <chat_id> <none|summary|detailed>`, `/help`.
+`/privacy [on|off]`, `/share <chat_id> <none|summary|detailed>`, `/link`, `/devices`,
+`/revoke_device <device_uuid>`, `/help`.
+
+Для Android выполните `/link` в private Telegram chat и введите одноразовый код в
+приложении. Сборка companion и настройка backend URL описаны в deployment guide.
 
 Для импорта отправьте GPX/TCX/FIT/CSV или ZIP с одним поддерживаемым файлом в личный
 чат. Бот покажет normalized preview; Activity появится только после подтверждения.
