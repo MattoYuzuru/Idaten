@@ -10,3 +10,10 @@ htmlcov/
 *.sqlite3
 .idea/
 .DS_Store
+android/.gradle/
+android/**/build/
+android/local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
