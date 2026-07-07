@@ -193,6 +193,16 @@ Local-path PVC привязан к VPS/node и не является HA storage;
 Зафиксируйте предыдущий digest до rollout. Rollback меняет только image и никогда не
 удаляет namespace/PVC и не запускает Alembic downgrade автоматически:
 
+Для первого production rollout `v0.6.0` не является допустимой rollback target: он не
+достиг Ready из-за startup blockers. Первый подтвержденный healthy digest —
+`sha256:ca915aacde39692b715526d107bf2e0830af5f7b61fe0e59343b47a5d128df51`
+(`v0.6.1`). До появления следующего healthy release аварийный rollback означает остановку
+Deployment с сохранением DB/PVC:
+
+```bash
+ssh keykomi 'sudo k3s kubectl scale deployment/idaten-backend -n idaten --replicas=0'
+```
+
 ```bash
 ssh keykomi 'sudo k3s kubectl set image deployment/idaten-backend -n idaten backend=ghcr.io/mattoyuzuru/idaten-backend@sha256:PREVIOUS_DIGEST'
 ssh keykomi 'sudo k3s kubectl rollout status deployment/idaten-backend -n idaten --timeout=180s'

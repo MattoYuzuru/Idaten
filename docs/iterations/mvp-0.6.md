@@ -363,13 +363,13 @@ cd android
 - [x] Health Connect install/update/unsupported/permission onboarding реализован.
 - [x] Android onboarding и regression tests добавлены.
 - [x] Постоянный signing key настроен и безопасно зарезервирован.
-- [ ] Release workflow публикует signed APK, checksum и GHCR image.
+- [x] Release workflow публикует signed APK, checksum и GHCR image.
 - [x] Kubernetes manifests и secret-safe provisioning документированы.
-- [ ] Isolated Idaten DB/user созданы в существующем PostgreSQL.
-- [ ] DNS, TLS, probes, PVC, limits, single-replica rollout и rollback проверены.
+- [x] Isolated Idaten DB/user созданы в существующем PostgreSQL.
+- [x] DNS, TLS, probes, PVC, limits, single-replica rollout и rollback проверены.
 - [ ] Реальный APK скачан из GitHub Release, установлен и пройден manual device flow.
-- [ ] Full CI и production smoke прошли.
-- [ ] README, roadmap, deployment guide и handoff обновлены; draft PR опубликован.
+- [x] Full CI и production smoke прошли.
+- [x] README, roadmap, deployment guide и handoff обновлены; draft PR опубликован.
 
 ## Known limitations, которые должны сохраниться после MVP 0.6
 
