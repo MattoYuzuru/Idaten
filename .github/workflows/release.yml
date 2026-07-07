@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: idaten
+          POSTGRES_USER: idaten
+          POSTGRES_PASSWORD: idaten
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U idaten -d idaten"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://idaten:idaten@localhost:5432/idaten
+      ANDROID_RELEASE_KEYSTORE_PATH: /tmp/idaten-release.jks
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      IMAGE_NAME: ghcr.io/mattoyuzuru/idaten-backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release commit and version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          version="${GITHUB_REF_NAME#v}"
+          grep -Fq "version = \"$version\"" backend/pyproject.toml
+          grep -Fq "versionName = \"$version\"" android/app/build.gradle.kts
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; refusing to overwrite assets" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Backend quality gate
+        working-directory: backend
+        run: |
+          pip install -e '.[dev]'
+          ruff format --check .
+          ruff check .
+          mypy app
+          pytest -q
+          alembic upgrade head
+          alembic check
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Restore release keystore
+        shell: bash
+        run: printf '%s' '${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}' | base64 --decode > "$ANDROID_RELEASE_KEYSTORE_PATH"
+      - name: Android quality gate and signed APK
+        working-directory: android
+        run: |
+          ./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} spotlessCheck
+          ./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} testDebugUnitTest
+          ./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} assembleDebug
+          ./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} assembleRelease
+          ./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} lintDebug
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/idaten-${GITHUB_REF_NAME}.apk"
+          cd "$RUNNER_TEMP"
+          sha256sum "idaten-${GITHUB_REF_NAME}.apk" > "idaten-${GITHUB_REF_NAME}.apk.sha256"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Reject an existing image tag
+        run: |
+          if docker buildx imagetools inspect "$IMAGE_NAME:$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Image tag $IMAGE_NAME:$GITHUB_REF_NAME already exists; refusing to overwrite it" >&2
+            exit 1
+          fi
+      - name: Build and publish backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+
+      - name: Create immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            --title "Idaten $GITHUB_REF_NAME" \
+            "$RUNNER_TEMP/idaten-${GITHUB_REF_NAME}.apk" \
+            "$RUNNER_TEMP/idaten-${GITHUB_REF_NAME}.apk.sha256"

@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: idaten-backend
+  namespace: idaten
+  labels:
+    app.kubernetes.io/name: idaten
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: idaten
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: idaten
+        app.kubernetes.io/component: backend
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: ghcr.io/mattoyuzuru/idaten-backend:sha-RELEASE_COMMIT
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          envFrom:
+            - secretRef:
+                name: idaten-runtime
+          env:
+            - name: DEFAULT_TIMEZONE
+              value: Europe/Moscow
+            - name: HEALTH_CONNECT_LINK_ATTEMPT_LIMIT
+              value: "5"
+            - name: HEALTH_CONNECT_LINK_ATTEMPT_WINDOW_SECONDS
+              value: "900"
+            - name: HEALTH_CONNECT_LINK_TTL_SECONDS
+              value: "600"
+            - name: HEALTH_CONNECT_MAX_BATCH_SIZE
+              value: "25"
+            - name: LLM_PROVIDER
+              value: NONE
+            - name: LOG_LEVEL
+              value: INFO
+            - name: OUTBOX_POLL_SECONDS
+              value: "5"
+            - name: STORAGE_PATH
+              value: /data/idaten
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            failureThreshold: 24
+            periodSeconds: 5
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 3
+            periodSeconds: 20
+            timeoutSeconds: 2
+          volumeMounts:
+            - mountPath: /data/idaten
+              name: storage
+            - mountPath: /tmp
+              name: tmp
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: idaten-storage
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
