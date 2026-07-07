@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from app.activities.models import SourceType
+
 
 class ActivityInputError(ValueError):
     pass
@@ -41,6 +43,16 @@ class RecordedRun:
     activity: ActivitySummary
     week_stats: AggregateStats
     report_message: str
+
+
+@dataclass(frozen=True, slots=True)
+class RunHistoryItem:
+    started_at: datetime
+    distance_m: int
+    elapsed_time_sec: int
+    avg_pace_sec_per_km: int
+    title: str | None
+    source_type: SourceType
 
 
 def parse_distance_km(value: str) -> int:

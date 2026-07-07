@@ -18,6 +18,8 @@ from app.bot.messages import (
     format_share_level,
     format_stats,
 )
+from app.coach.models import TrainingGoal
+from app.coach.schemas import CoachError
 from app.groups.models import ShareLevel
 from app.groups.schemas import GroupError, ShareTarget
 from app.health_connect.schemas import HealthConnectError
@@ -100,11 +102,59 @@ async def stats(message: Message, services: AppServices) -> None:
 @router.message(Command("week"))
 async def week(message: Message, services: AppServices) -> None:
     try:
-        result = await services.activities.week(identity_from_message(message).telegram_user_id)
-    except ActivityInputError as error:
+        result = await services.coach.week(identity_from_message(message).telegram_user_id)
+    except CoachError as error:
         await message.answer(str(error))
         return
-    await message.answer(format_stats(result, "Текущая неделя"))
+    await message.answer(result.message)
+
+
+@router.message(Command("next"))
+async def next_workout(message: Message, services: AppServices) -> None:
+    try:
+        result = await services.coach.next_workout(identity_from_message(message).telegram_user_id)
+    except CoachError as error:
+        await message.answer(str(error))
+        return
+    await message.answer(result.message)
+
+
+@router.message(Command("plan"))
+async def plan(message: Message, command: CommandObject, services: AppServices) -> None:
+    parts = (command.args or "").split(maxsplit=1)
+    try:
+        goal = TrainingGoal(parts[0].upper())
+    except (IndexError, ValueError):
+        await message.answer("Формат: /plan <FIRST_10K|HALF|MARATHON|CUSTOM> [цель]")
+        return
+    try:
+        result = await services.coach.create_plan(
+            identity_from_message(message).telegram_user_id,
+            goal,
+            custom_goal=parts[1] if len(parts) > 1 else None,
+        )
+    except CoachError as error:
+        await message.answer(str(error))
+        return
+    await message.answer(result.message)
+
+
+@router.message(Command("external_processing"))
+async def external_processing(
+    message: Message, command: CommandObject, services: AppServices
+) -> None:
+    value = (command.args or "").strip().lower()
+    if value not in {"on", "off"}:
+        await message.answer("Формат: /external_processing on|off")
+        return
+    try:
+        enabled = await services.coach.set_external_processing(
+            identity_from_message(message).telegram_user_id, enabled=value == "on"
+        )
+    except CoachError as error:
+        await message.answer(str(error))
+        return
+    await message.answer(f"Внешняя обработка: {'включена' if enabled else 'выключена'}.")
 
 
 @router.message(Command("pr"))

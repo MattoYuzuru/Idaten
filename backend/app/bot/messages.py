@@ -9,6 +9,9 @@ HELP_TEXT = """Idaten сохраняет и анализирует ваши пр
 /run 10.02 1:02:41 — добавить пробежку
 /stats — статистика за все время
 /week — текущая неделя
+/next — следующая безопасная тренировка
+/plan <FIRST_10K|HALF|MARATHON|CUSTOM> [цель] — черновик плана
+/external_processing [on|off] — внешний wording (по умолчанию off)
 /pr — лучшие зарегистрированные 5K и 10K
 /privacy [on|off] — настройки приватности
 /share <chat_id> <none|summary|detailed> — sharing для группы

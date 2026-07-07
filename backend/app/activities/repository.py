@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.activities.models import Activity, ActivitySource, ActivityType, SourceType
-from app.activities.schemas import ActivitySummary, AggregateStats
+from app.activities.schemas import ActivitySummary, AggregateStats, RunHistoryItem
 
 
 class ActivityRepository:
@@ -76,4 +76,29 @@ class ActivityRepository:
             distance_m=activity.distance_m,
             elapsed_time_sec=activity.elapsed_time_sec,
             avg_pace_sec_per_km=activity.avg_pace_sec_per_km,
+        )
+
+    async def run_history(
+        self, user_id: uuid.UUID, *, started_before: datetime | None = None
+    ) -> tuple[RunHistoryItem, ...]:
+        statement = select(Activity).where(
+            Activity.user_id == user_id,
+            Activity.activity_type == ActivityType.RUN,
+            Activity.deleted_at.is_(None),
+        )
+        if started_before is not None:
+            statement = statement.where(Activity.started_at <= started_before)
+        activities = (
+            (await self.session.execute(statement.order_by(Activity.started_at))).scalars().all()
+        )
+        return tuple(
+            RunHistoryItem(
+                started_at=activity.started_at,
+                distance_m=activity.distance_m,
+                elapsed_time_sec=activity.elapsed_time_sec,
+                avg_pace_sec_per_km=activity.avg_pace_sec_per_km,
+                title=activity.title,
+                source_type=activity.source_type,
+            )
+            for activity in activities
         )

@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     health_connect_link_attempt_window_seconds: int = 900
     health_connect_max_batch_size: int = 25
     outbox_poll_seconds: int = 5
+    llm_provider: str = "NONE"
+    llm_model: str = ""
+    llm_api_key: SecretStr | None = None
+    llm_endpoint: str | None = None
+    llm_timeout_seconds: float = 8.0
+    llm_retries: int = 1
 
     @property
     def bot_token(self) -> str | None:
@@ -45,6 +51,13 @@ class Settings(BaseSettings):
         if self.health_connect_security_pepper is None:
             return None
         value = self.health_connect_security_pepper.get_secret_value().strip()
+        return value or None
+
+    @property
+    def wording_api_key(self) -> str | None:
+        if self.llm_api_key is None:
+            return None
+        value = self.llm_api_key.get_secret_value().strip()
         return value or None
 
 

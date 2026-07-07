@@ -3,7 +3,16 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.activities.service import ActivityService
+from app.coach.provider import (
+    JsonHttpWordingProvider,
+    LLMProviderName,
+    NoneWordingProvider,
+    ProviderExecutor,
+    WordingProvider,
+)
+from app.coach.service import CoachService
 from app.core.config import Settings
+from app.groups.monthly_service import MonthlyReportService
 from app.groups.service import GroupService
 from app.health_connect.outbox import TelegramOutboxService
 from app.health_connect.service import HealthConnectService
@@ -20,6 +29,8 @@ class AppServices:
     imports: ImportService
     health_connect: HealthConnectService
     outbox: TelegramOutboxService
+    coach: CoachService
+    monthly: MonthlyReportService
 
 
 def build_services(
@@ -41,6 +52,33 @@ def build_services(
         link_attempt_window_seconds=settings.health_connect_link_attempt_window_seconds,
         max_batch_size=settings.health_connect_max_batch_size,
     )
+    provider_name = LLMProviderName(settings.llm_provider.upper())
+    endpoints = {
+        LLMProviderName.OPENAI: "https://api.openai.com/v1/chat/completions",
+        LLMProviderName.GEMINI: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        LLMProviderName.DEEPSEEK: "https://api.deepseek.com/chat/completions",
+        LLMProviderName.OPENROUTER: "https://openrouter.ai/api/v1/chat/completions",
+        LLMProviderName.OLLAMA: "http://localhost:11434/api/chat",
+    }
+    provider: WordingProvider
+    if provider_name == LLMProviderName.NONE or not settings.llm_model.strip():
+        provider = NoneWordingProvider()
+    else:
+        provider = JsonHttpWordingProvider(
+            provider_name,
+            settings.llm_model,
+            settings.llm_endpoint or endpoints[provider_name],
+            settings.wording_api_key,
+            request_timeout_seconds=settings.llm_timeout_seconds,
+        )
+    coach = CoachService(
+        session_factory,
+        ProviderExecutor(
+            provider,
+            timeout_seconds=settings.llm_timeout_seconds,
+            retries=settings.llm_retries,
+        ),
+    )
     return AppServices(
         users=users,
         activities=ActivityService(session_factory, users),
@@ -56,4 +94,6 @@ def build_services(
         ),
         health_connect=health_connect,
         outbox=TelegramOutboxService(session_factory),
+        coach=coach,
+        monthly=MonthlyReportService(session_factory),
     )

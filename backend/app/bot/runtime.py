@@ -7,6 +7,7 @@ from aiogram.types import BotCommand
 
 from app.bot.group_handlers import router as group_router
 from app.bot.handlers import router
+from app.jobs.monthly import MonthlyReportJob
 from app.services import AppServices
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class BotRuntime:
         self.outbox_poll_seconds = outbox_poll_seconds
         self.task: asyncio.Task[None] | None = None
         self.outbox_task: asyncio.Task[None] | None = None
+        self.monthly_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await self.bot.set_my_commands(
@@ -30,6 +32,11 @@ class BotRuntime:
                 BotCommand(command="run", description="Добавить пробежку"),
                 BotCommand(command="stats", description="Статистика за все время"),
                 BotCommand(command="week", description="Текущая неделя"),
+                BotCommand(command="next", description="Следующая тренировка"),
+                BotCommand(command="plan", description="Черновик плана"),
+                BotCommand(command="month", description="Месяц группы"),
+                BotCommand(command="group_goal", description="Цель группы на месяц"),
+                BotCommand(command="external_processing", description="Внешний wording"),
                 BotCommand(command="pr", description="Личные результаты"),
                 BotCommand(command="privacy", description="Настройки приватности"),
                 BotCommand(command="share", description="Sharing для группы"),
@@ -55,6 +62,7 @@ class BotRuntime:
             name="telegram-polling",
         )
         self.outbox_task = asyncio.create_task(self._outbox_loop(), name="telegram-outbox")
+        self.monthly_task = asyncio.create_task(self._monthly_loop(), name="monthly-reports")
         logger.info("Telegram polling started")
 
     async def stop(self) -> None:
@@ -66,6 +74,10 @@ class BotRuntime:
             self.outbox_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.outbox_task
+        if self.monthly_task is not None:
+            self.monthly_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.monthly_task
         await self.bot.session.close()
         logger.info("Telegram polling stopped")
 
@@ -73,9 +85,19 @@ class BotRuntime:
         while True:
             try:
                 await self.services.outbox.deliver_pending(self._send_private_message)
+                await self.services.monthly.deliver_pending(self._send_private_message)
             except Exception:
                 logger.exception("Telegram outbox poll failed")
             await asyncio.sleep(self.outbox_poll_seconds)
+
+    async def _monthly_loop(self) -> None:
+        job = MonthlyReportJob(self.services.monthly)
+        while True:
+            try:
+                await job.run()
+            except Exception:
+                logger.exception("Monthly report job failed")
+            await asyncio.sleep(3600)
 
     async def _send_private_message(self, chat_id: int, text: str) -> int:
         sent = await self.bot.send_message(chat_id, text)

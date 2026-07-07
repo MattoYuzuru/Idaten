@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -6,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.bot.messages import format_group_week, format_leaderboard, format_streaks
+from app.groups.monthly_service import format_month
 from app.groups.schemas import GroupError
 from app.services import AppServices
 
@@ -95,3 +97,41 @@ async def week(message: Message, services: AppServices) -> None:
         await message.answer(str(error))
         return
     await message.answer(format_group_week(result))
+
+
+@router.message(Command("month"))
+async def month(message: Message, services: AppServices) -> None:
+    try:
+        result = await services.monthly.current(message.chat.id, datetime.now(UTC))
+    except GroupError as error:
+        await message.answer(str(error))
+        return
+    await message.answer(format_month(result))
+
+
+@router.message(Command("group_goal"))
+async def group_goal(message: Message, services: AppServices) -> None:
+    text = message.text or ""
+    argument = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) == 2 else ""
+    try:
+        target_m = int((Decimal(argument.replace(",", ".")) * 1000).quantize(Decimal("1")))
+    except (InvalidOperation, ValueError):
+        await message.answer("Формат: /group_goal <км>")
+        return
+    try:
+        user_id = telegram_user_id(message)
+        bot = message.bot
+        if bot is None:
+            raise GroupError("Telegram bot недоступен.")
+        member = await bot.get_chat_member(message.chat.id, user_id)
+        result = await services.monthly.set_goal(
+            message.chat.id,
+            target_m,
+            datetime.now(UTC),
+            actor_is_admin=member.status
+            in {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR},
+        )
+    except GroupError as error:
+        await message.answer(str(error))
+        return
+    await message.answer(format_month(result))

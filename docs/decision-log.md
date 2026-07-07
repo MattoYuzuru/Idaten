@@ -82,3 +82,17 @@
   повторной sync-доставке.
 - Причина: сетевой вызов Telegram нельзя включить в SQL-транзакцию, поэтому durable
   outbox отделяет атомарную фиксацию результата от повторяемой доставки.
+
+## ADR-010 — versioned coach facts и изолированный внешний wording
+
+- Дата: 2026-07-07
+- Статус: принято
+- Решение: analytics calculator формирует детерминированный allowlisted `facts_json` с
+  обязательными `calculator_version` и `rule_version`. Canonical recommendation строится
+  локальными rules/templates; внешний provider может только переформулировать этот
+  результат после явного user opt-in. Provider metadata сохраняется без ключа и полного
+  prompt. Plan и coach report фиксируются атомарно, а monthly group report и его Telegram
+  outbox создаются в одной транзакции с уникальностью по group, period и report type.
+- Причина: одинаковые facts должны давать воспроизводимый результат, внешняя ошибка не
+  должна менять метрики или откатывать продуктовые данные, а повтор monthly job не должен
+  создавать второй report или Telegram message.
