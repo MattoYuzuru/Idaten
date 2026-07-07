@@ -11,6 +11,7 @@ import dev.idaten.companion.data.SyncItemResponse
 import dev.idaten.companion.data.SyncRequest
 import dev.idaten.companion.data.SyncResponse
 import dev.idaten.companion.health.HealthConnectSource
+import dev.idaten.companion.health.HealthOnboardingState
 import dev.idaten.companion.model.HealthAvailability
 import dev.idaten.companion.model.PermissionState
 import dev.idaten.companion.model.RawHealthRun
@@ -20,6 +21,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.io.IOException
 
 class MainViewModelTest {
     @get:Rule val mainDispatcherRule = MainDispatcherRule()
@@ -57,22 +59,121 @@ class MainViewModelTest {
             )
         }
 
-    private class FakeHealth : HealthConnectSource {
+    @Test
+    fun unavailableProviderBlocksPermissionRequestAndReads() =
+        runTest {
+            val health = FakeHealth(HealthAvailability.UNAVAILABLE)
+            val viewModel =
+                MainViewModel(
+                    DeviceRepository(FakeApi(), InMemoryTokenStore(), { "install" }),
+                    health,
+                )
+
+            assertEquals(HealthOnboardingState.UNSUPPORTED, viewModel.state.value.healthState)
+            assertEquals(null, viewModel.requestBasePermissions())
+            viewModel.loadLatestRuns().join()
+            assertEquals(0, health.readCalls)
+        }
+
+    @Test
+    fun foregroundRefreshesProviderAndPermissionState() =
+        runTest {
+            val health = FakeHealth(HealthAvailability.UPDATE_REQUIRED)
+            val viewModel =
+                MainViewModel(
+                    DeviceRepository(FakeApi(), InMemoryTokenStore(), { "install" }),
+                    health,
+                )
+            assertEquals(HealthOnboardingState.PROVIDER_UPDATE_REQUIRED, viewModel.state.value.healthState)
+
+            health.currentAvailability = HealthAvailability.AVAILABLE
+            health.granted = health.basePermissions
+            viewModel.onForeground()
+
+            assertEquals(HealthOnboardingState.READY, viewModel.state.value.healthState)
+            assertTrue(health.permissionChecks >= 2)
+        }
+
+    @Test
+    fun grantPartialDenyAndManualRetryRemainExplicit() =
+        runTest {
+            val health = FakeHealth(HealthAvailability.AVAILABLE).apply { granted = emptySet() }
+            val viewModel =
+                MainViewModel(
+                    DeviceRepository(FakeApi(), InMemoryTokenStore(), { "install" }),
+                    health,
+                )
+
+            assertEquals(health.basePermissions, viewModel.requestBasePermissions())
+            assertFalse(health.basePermissions.contains(health.routePermission))
+            assertEquals(null, viewModel.requestBasePermissions())
+            viewModel.onPermissionResult(setOf("exercise"))
+            assertEquals(HealthOnboardingState.PERMISSIONS_REQUIRED, viewModel.state.value.healthState)
+            assertEquals(health.basePermissions, viewModel.requestBasePermissions())
+            viewModel.onPermissionResult(emptySet())
+            assertEquals(HealthOnboardingState.PERMISSIONS_REQUIRED, viewModel.state.value.healthState)
+            assertEquals(health.basePermissions, viewModel.requestBasePermissions())
+            viewModel.onPermissionResult(health.basePermissions)
+            assertEquals(HealthOnboardingState.READY, viewModel.state.value.healthState)
+        }
+
+    @Test
+    fun repeatedProviderActionIsIgnoredUntilReturnThenRefreshed() =
+        runTest {
+            val health = FakeHealth(HealthAvailability.UPDATE_REQUIRED)
+            val viewModel =
+                MainViewModel(
+                    DeviceRepository(FakeApi(), InMemoryTokenStore(), { "install" }),
+                    health,
+                )
+
+            assertTrue(viewModel.startProviderAction())
+            assertFalse(viewModel.startProviderAction())
+            health.currentAvailability = HealthAvailability.AVAILABLE
+            health.granted = health.basePermissions
+            viewModel.providerActionFinished()
+            assertEquals(HealthOnboardingState.READY, viewModel.state.value.healthState)
+        }
+
+    @Test
+    fun backendFailureDoesNotMasqueradeAsHealthConnectFailure() =
+        runTest {
+            val store = InMemoryTokenStore().apply { write("token") }
+            val viewModel =
+                MainViewModel(
+                    DeviceRepository(FailingStatusApi(), store, { "install" }),
+                    FakeHealth(),
+                )
+
+            assertEquals(HealthOnboardingState.READY, viewModel.state.value.healthState)
+            assertEquals(null, viewModel.state.value.healthMessage)
+            assertEquals("Ошибка сети или backend", viewModel.state.value.backendMessage)
+        }
+
+    private class FakeHealth(
+        var currentAvailability: HealthAvailability = HealthAvailability.AVAILABLE,
+    ) : HealthConnectSource {
         override val basePermissions = setOf("exercise", "distance")
         override val routePermission = "route"
+        var granted: Set<String> = if (currentAvailability == HealthAvailability.AVAILABLE) basePermissions else emptySet()
+        var permissionChecks = 0
+        var readCalls = 0
 
-        override fun availability() = HealthAvailability.AVAILABLE
+        override fun availability() = currentAvailability
 
-        override suspend fun permissionState() =
-            PermissionState(
-                HealthAvailability.AVAILABLE,
-                basePermissions,
+        override suspend fun permissionState(): PermissionState {
+            permissionChecks += 1
+            return PermissionState(
+                currentAvailability,
+                granted,
                 basePermissions,
                 routeGranted = false,
             )
+        }
 
-        override suspend fun latestRuns(limit: Int) =
-            listOf(
+        override suspend fun latestRuns(limit: Int): List<RawHealthRun> {
+            readCalls += 1
+            return listOf(
                 RawHealthRun(
                     externalId = "hc-1",
                     startedAt = "2026-07-06T06:00:00Z",
@@ -81,11 +182,23 @@ class MainViewModelTest {
                     elapsedSeconds = 1_800,
                 ),
             )
+        }
 
         override fun withRoute(
             run: RawHealthRun,
             route: ExerciseRoute,
         ) = run
+    }
+
+    private class FailingStatusApi : IdatenApi {
+        override suspend fun completeLink(request: LinkCompleteRequest): LinkCompleteResponse = error("not used")
+
+        override suspend fun status(token: String): DeviceStatusResponse = throw IOException("offline")
+
+        override suspend fun sync(
+            token: String,
+            request: SyncRequest,
+        ): SyncResponse = error("not used")
     }
 
     private class FakeApi : IdatenApi {

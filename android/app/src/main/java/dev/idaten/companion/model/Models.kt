@@ -1,5 +1,6 @@
 package dev.idaten.companion.model
 
+import dev.idaten.companion.health.HealthOnboardingState
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -110,6 +111,13 @@ data class PermissionState(
 ) {
     val baseGranted: Boolean = healthConnect == HealthAvailability.AVAILABLE && granted.containsAll(required)
     val canReadRoute: Boolean = baseGranted && routeGranted
+    val onboardingState: HealthOnboardingState =
+        when (healthConnect) {
+            HealthAvailability.AVAILABLE ->
+                if (baseGranted) HealthOnboardingState.READY else HealthOnboardingState.PERMISSIONS_REQUIRED
+            HealthAvailability.UPDATE_REQUIRED -> HealthOnboardingState.PROVIDER_UPDATE_REQUIRED
+            HealthAvailability.UNAVAILABLE -> HealthOnboardingState.UNSUPPORTED
+        }
 }
 
 data class RunItem(

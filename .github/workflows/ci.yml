@@ -51,8 +51,24 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build backend
 
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - run: python3 -m unittest discover -s deploy -p 'test_*.py'
+      - run: shellcheck deploy/deploy-production.sh
+      - run: kubectl kustomize deploy/kubernetes >/tmp/idaten-kubernetes.yaml
+      - run: "grep -Fq 'replicas: 1' /tmp/idaten-kubernetes.yaml"
+      - run: "grep -Fq 'type: Recreate' /tmp/idaten-kubernetes.yaml"
+
   android:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_RELEASE_KEYSTORE_PATH: /tmp/idaten-release.jks
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
     defaults:
       run:
         working-directory: android
@@ -65,7 +81,13 @@ jobs:
       - uses: android-actions/setup-android@v3
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew spotlessCheck
-      - run: ./gradlew testDebugUnitTest
-      - run: ./gradlew assembleDebug
-      - run: ./gradlew lintDebug
+      - name: Restore release keystore
+        shell: bash
+        run: |
+          printf '%s' '${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}' | base64 --decode > "$ANDROID_RELEASE_KEYSTORE_PATH"
+      - run: "./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} spotlessCheck"
+      - run: "./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} testDebugUnitTest"
+      - run: "./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} assembleDebug"
+      - run: "./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} assembleRelease"
+      - run: "./gradlew -PIDATEN_BASE_URL=${{ vars.IDATEN_BASE_URL }} lintDebug"
+      - run: '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk'

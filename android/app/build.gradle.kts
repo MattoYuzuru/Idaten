@@ -6,6 +6,18 @@ plugins {
     id("com.diffplug.spotless")
 }
 
+val releaseKeystorePath = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE_PATH").orNull
+val releaseKeyAlias = providers.environmentVariable("ANDROID_RELEASE_KEY_ALIAS").orNull
+val releaseKeystorePassword = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE_PASSWORD").orNull
+val releaseKeyPassword = providers.environmentVariable("ANDROID_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningConfigured =
+    listOf(
+        releaseKeystorePath,
+        releaseKeyAlias,
+        releaseKeystorePassword,
+        releaseKeyPassword,
+    ).all { !it.isNullOrBlank() }
+
 spotless {
     kotlin {
         target("src/**/*.kt")
@@ -25,8 +37,8 @@ android {
         applicationId = "dev.idaten.companion"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.4.0"
+        versionCode = 2
+        versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         val idatenBaseUrl =
             providers
@@ -41,6 +53,25 @@ android {
         buildConfig = true
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseKeystorePath))
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -49,6 +80,18 @@ android {
 
     testOptions { unitTests.isReturnDefaultValues = true }
 }
+
+val requireReleaseSigning =
+    tasks.register("requireReleaseSigning") {
+        doLast {
+            check(releaseSigningConfigured) {
+                "Release signing requires ANDROID_RELEASE_KEYSTORE_PATH, ANDROID_RELEASE_KEY_ALIAS, " +
+                    "ANDROID_RELEASE_KEYSTORE_PASSWORD and ANDROID_RELEASE_KEY_PASSWORD"
+            }
+        }
+    }
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(requireReleaseSigning) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.05.01")
