@@ -43,8 +43,15 @@ reports и optional LLM wording providers.
 
 Подробности: [mvp-0.5.md](iterations/mvp-0.5.md).
 
-## После MVP 0.5
+## MVP 0.6 — Android release и production deployment
+
+Добавляет Health Connect onboarding, постоянную release-подпись APK, GitHub Release/GHCR
+pipeline и single-replica deployment в существующий k3s за HTTPS с изолированными
+PostgreSQL database/user, Kubernetes Secret и PVC.
+
+Подробности: [mvp-0.6.md](iterations/mvp-0.6.md).
+
+## После MVP 0.6
 
 Отдельно оцениваются: Strava private integration, screenshot OCR/vision, web dashboard,
 race search, S3/MinIO, Redis и observability stack. Они не должны заранее усложнять MVP.
-

@@ -359,12 +359,12 @@ cd android
 
 ## Checklist
 
-- [ ] ADR о k3s/GHCR/signed release/existing PostgreSQL добавлена.
-- [ ] Health Connect install/update/unsupported/permission onboarding реализован.
-- [ ] Android onboarding и regression tests добавлены.
-- [ ] Постоянный signing key настроен и безопасно зарезервирован.
+- [x] ADR о k3s/GHCR/signed release/existing PostgreSQL добавлена.
+- [x] Health Connect install/update/unsupported/permission onboarding реализован.
+- [x] Android onboarding и regression tests добавлены.
+- [x] Постоянный signing key настроен и безопасно зарезервирован.
 - [ ] Release workflow публикует signed APK, checksum и GHCR image.
-- [ ] Kubernetes manifests и secret-safe provisioning документированы.
+- [x] Kubernetes manifests и secret-safe provisioning документированы.
 - [ ] Isolated Idaten DB/user созданы в существующем PostgreSQL.
 - [ ] DNS, TLS, probes, PVC, limits, single-replica rollout и rollback проверены.
 - [ ] Реальный APK скачан из GitHub Release, установлен и пройден manual device flow.

@@ -2,10 +2,10 @@
 
 Self-hosted Telegram-бот и backend для учета беговых тренировок, аналитики и рекомендаций.
 
-Реализован **MVP 0.5**: deterministic weekly/monthly analytics, versioned coach rules,
-безопасный четырехнедельный draft plan, group monthly awards/goal и optional external
-wording с явным opt-in. Все команды работают на canonical templates без LLM key;
-Health Connect, imports и privacy/source policy предыдущих MVP сохранены.
+Реализован **MVP 0.6**: устанавливаемый Android companion с Health Connect onboarding,
+постоянно подписанный GitHub Release APK, immutable backend image в GHCR и production
+manifests для существующего k3s. Coach, imports и privacy/source policy предыдущих MVP
+сохранены; Activity из Health Connect по-прежнему создается `PRIVATE`.
 
 ## Документация
 
@@ -13,7 +13,7 @@ Health Connect, imports и privacy/source policy предыдущих MVP сох
 - [Roadmap](docs/roadmap.md)
 - [Инструкция для следующего агента](docs/agent-handoff.md)
 - [Журнал решений](docs/decision-log.md)
-- [Спецификация MVP 0.5](docs/iterations/mvp-0.5.md)
+- [Спецификация MVP 0.6](docs/iterations/mvp-0.6.md)
 - [Спецификации следующих MVP](docs/iterations/)
 - [Локальный запуск](docs/deployment.md)
 
@@ -37,8 +37,10 @@ curl http://localhost:8000/ready
 `/privacy [on|off]`, `/share <chat_id> <none|summary|detailed>`, `/link`, `/devices`,
 `/revoke_device <device_uuid>`, `/help`.
 
-Для Android выполните `/link` в private Telegram chat и введите одноразовый код в
-приложении. Сборка companion и настройка backend URL описаны в deployment guide.
+Подписанный Android APK публикуется в [GitHub Releases](https://github.com/MattoYuzuru/Idaten/releases).
+После установки предоставьте read permissions Health Connect, выполните `/link` в
+private Telegram chat и введите одноразовый код в приложении. Установка, ручное обновление
+и проверка checksum описаны в deployment guide.
 
 Для импорта отправьте GPX/TCX/FIT/CSV или ZIP с одним поддерживаемым файлом в личный
 чат. Бот покажет normalized preview; Activity появится только после подтверждения.
