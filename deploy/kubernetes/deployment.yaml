@@ -23,7 +23,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        fsGroup: 1000
+        fsGroup: 999
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
@@ -38,6 +38,8 @@ spec:
                 - ALL
             readOnlyRootFilesystem: true
             runAsNonRoot: true
+            runAsGroup: 999
+            runAsUser: 999
           envFrom:
             - secretRef:
                 name: idaten-runtime

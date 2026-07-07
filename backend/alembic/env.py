@@ -8,6 +8,7 @@ from alembic import context
 from app.activities import models as activity_models  # noqa: F401
 from app.coach import models as coach_models  # noqa: F401
 from app.core.config import get_settings
+from app.db.alembic import escape_config_percent
 from app.db.base import Base
 from app.groups import models as group_models  # noqa: F401
 from app.health_connect import models as health_connect_models  # noqa: F401
@@ -18,7 +19,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+config.set_main_option("sqlalchemy.url", escape_config_percent(get_settings().database_url))
 target_metadata = Base.metadata
 
 
