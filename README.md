@@ -2,10 +2,10 @@
 
 Self-hosted Telegram-бот и backend для учета беговых тренировок, аналитики и рекомендаций.
 
-Реализован **MVP 0.4**: Android companion вручную синхронизирует беговые тренировки
-из Health Connect через one-time Telegram linking. Backend использует scoped revocable
-device token, PRIVATE-by-default ingestion, persistent series storage и durable private
-Telegram report outbox. Файловый import и privacy/source policy MVP 0.3 сохранены.
+Реализован **MVP 0.5**: deterministic weekly/monthly analytics, versioned coach rules,
+безопасный четырехнедельный draft plan, group monthly awards/goal и optional external
+wording с явным opt-in. Все команды работают на canonical templates без LLM key;
+Health Connect, imports и privacy/source policy предыдущих MVP сохранены.
 
 ## Документация
 
@@ -13,7 +13,7 @@ Telegram report outbox. Файловый import и privacy/source policy MVP 0.3
 - [Roadmap](docs/roadmap.md)
 - [Инструкция для следующего агента](docs/agent-handoff.md)
 - [Журнал решений](docs/decision-log.md)
-- [Спецификация MVP 0.4](docs/iterations/mvp-0.4.md)
+- [Спецификация MVP 0.5](docs/iterations/mvp-0.5.md)
 - [Спецификации следующих MVP](docs/iterations/)
 - [Локальный запуск](docs/deployment.md)
 
@@ -32,7 +32,8 @@ curl http://localhost:8000/health
 curl http://localhost:8000/ready
 ```
 
-Личные команды: `/start`, `/run 10.02 1:02:41`, `/stats`, `/week`, `/pr`,
+Личные команды: `/start`, `/run 10.02 1:02:41`, `/stats`, `/week`, `/next`,
+`/plan <FIRST_10K|HALF|MARATHON|CUSTOM> [цель]`, `/external_processing on|off`, `/pr`,
 `/privacy [on|off]`, `/share <chat_id> <none|summary|detailed>`, `/link`, `/devices`,
 `/revoke_device <device_uuid>`, `/help`.
 
@@ -44,7 +45,7 @@ curl http://localhost:8000/ready
 `/imports` показывает последние попытки и их status.
 
 Команды в Telegram-группе: `/setup_group` (только Telegram admin/owner), `/join`,
-`/leave`, `/week`, `/leaderboard`, `/streaks`. После `/run` бот предлагает отдельное
+`/leave`, `/week`, `/month`, `/group_goal <км>`, `/leaderboard`, `/streaks`. После `/run` бот предлагает отдельное
 разрешение «Да/Нет/Всегда» для каждой группы. Без opt-in активность остается private и
 не учитывается в групповой статистике.
 

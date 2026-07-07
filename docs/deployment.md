@@ -1,4 +1,4 @@
-# Локальный запуск и deployment MVP 0.4
+# Локальный запуск и deployment MVP 0.5
 
 ## Требования
 
@@ -22,6 +22,14 @@ cp .env.example .env
 все существующие tokens. Link TTL, rate limit, batch limit и outbox polling настраиваются
 переменными из `.env.example`.
 
+Coach работает без внешнего provider при `LLM_PROVIDER=NONE`. Для optional wording
+поддерживаются `OPENAI`, `GEMINI`, `DEEPSEEK`, `OPENROUTER`, `OLLAMA`; задайте
+`LLM_MODEL`, при необходимости `LLM_API_KEY` и override `LLM_ENDPOINT`. Timeout и
+bounded retry задаются `LLM_TIMEOUT_SECONDS`/`LLM_RETRIES`. Даже при наличии ключа
+внешний вызов выполняется только после `/external_processing on`; Strava history
+консервативно блокирует внешний вызов. Provider получает только allowlisted aggregate
+facts и canonical recommendation, без raw/route/GPS/HR series/exact start/person IDs.
+
 ```bash
 docker compose up --build -d
 docker compose ps
@@ -32,6 +40,10 @@ docker compose logs -f backend
 
 Backend перед стартом применяет `alembic upgrade head`, затем FastAPI lifespan запускает
 polling. Одновременно должен работать только один polling instance.
+
+При активном Telegram polling hourly job идемпотентно создает отчет за предыдущий месяц
+и durable group outbox. Уникальность `(group, period, report type)` и `report_id` не дает
+повторному job/retry создать второй report или Telegram message.
 
 Для группового сценария пользователь сначала выполняет `/start` в личном чате. Затем
 Telegram admin/owner выполняет `/setup_group` в группе, участники — `/join`, а sharing
