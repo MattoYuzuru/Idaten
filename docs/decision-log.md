@@ -96,3 +96,21 @@
 - Причина: одинаковые facts должны давать воспроизводимый результат, внешняя ошибка не
   должна менять метрики или откатывать продуктовые данные, а повтор monthly job не должен
   создавать второй report или Telegram message.
+
+## ADR-011 — signed GitHub release и deployment в существующий k3s
+
+- Дата: 2026-07-07
+- Статус: принято
+- Решение: Android APK подписывается одной постоянной release identity и публикуется
+  GitHub Release workflow только из тега merge commit актуального `main`. Тот же workflow
+  публикует backend в `ghcr.io/mattoyuzuru/idaten-backend` с version и commit SHA tags;
+  production фиксирует immutable digest. Idaten развертывается одним backend replica со
+  стратегией `Recreate` в отдельном namespace существующего k3s и переиспользует Traefik,
+  cert-manager `letsencrypt-prod` и PostgreSQL `prod/postgres`. В PostgreSQL создаются
+  отдельные database/role `idaten`; runtime secrets и local-path PVC принадлежат только
+  namespace `idaten`. Production deployment остается явной локальной SSH-операцией, без
+  server private key в GitHub Actions.
+- Причина: постоянная подпись сохраняет Android update path, immutable image связывает
+  deployment с проверенным release commit, а reuse существующей инфраструктуры экономит
+  ресурсы малого VPS. Один replica исключает одновременный Telegram polling и periodic
+  jobs; отдельные DB/user/namespace/secret/storage изолируют Idaten от других workloads.
