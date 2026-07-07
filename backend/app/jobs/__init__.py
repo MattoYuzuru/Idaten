@@ -1,0 +1,1 @@
+"""Thin background job adapters."""

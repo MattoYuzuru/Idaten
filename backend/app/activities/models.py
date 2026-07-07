@@ -142,4 +142,7 @@ class CoachReport(Base):
     )
     message_private: Mapped[str] = mapped_column(Text)
     message_group: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(32), default="NONE")
+    provider_model: Mapped[str | None] = mapped_column(String(128))
+    prompt_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
