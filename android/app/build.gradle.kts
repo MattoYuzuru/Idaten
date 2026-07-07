@@ -1,0 +1,75 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.diffplug.spotless")
+}
+
+spotless {
+    kotlin {
+        target("src/**/*.kt")
+        ktlint("1.5.0")
+    }
+    kotlinGradle {
+        target("*.gradle.kts")
+        ktlint("1.5.0")
+    }
+}
+
+android {
+    namespace = "dev.idaten.companion"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "dev.idaten.companion"
+        minSdk = 28
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.4.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        val idatenBaseUrl =
+            providers
+                .gradleProperty("IDATEN_BASE_URL")
+                .orElse("https://idaten.invalid/")
+                .get()
+        buildConfigField("String", "IDATEN_BASE_URL", "\"$idatenBaseUrl\"")
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+
+    testOptions { unitTests.isReturnDefaultValues = true }
+}
+
+dependencies {
+    val composeBom = platform("androidx.compose:compose-bom:2025.05.01")
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation("androidx.health.connect:connect-client:1.1.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+}

@@ -59,3 +59,26 @@
 - Причина: в MVP 0.3 нет отдельной account/session authentication, но endpoint нельзя
   оставлять публичным. Shared token ограничивает endpoint для доверенной локальной
   интеграции; полноценная пользовательская авторизация остается отдельным будущим scope.
+
+## ADR-008 — scoped device tokens для Health Connect
+
+- Дата: 2026-07-06
+- Статус: принято
+- Решение: Android-устройство связывается с существующим пользователем одноразовым
+  короткоживущим кодом, созданным в private Telegram flow. Код и выданный device token
+  сохраняются только как keyed HMAC; token содержит публичный UUID устройства и
+  случайный секрет, имеет фиксированный scope `health_connect:sync` и может быть
+  немедленно отозван на backend.
+- Причина: Android не должен получать Telegram credentials или использовать общий
+  import token, а утечка БД не должна раскрывать действующие link codes/device tokens.
+
+## ADR-009 — transactional outbox для private sync reports
+
+- Дата: 2026-07-06
+- Статус: принято
+- Решение: Health Connect sync создает Activity, splits, coach report и уникальное
+  private Telegram outbox-сообщение в одной DB-транзакции. Polling runtime доставляет
+  outbox с lease/retry; уникальность по Activity предотвращает повторный report при
+  повторной sync-доставке.
+- Причина: сетевой вызов Telegram нельзя включить в SQL-транзакцию, поэтому durable
+  outbox отделяет атомарную фиксацию результата от повторяемой доставки.

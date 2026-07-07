@@ -405,6 +405,8 @@ class ImportService:
                 "longitude": point.longitude,
                 "elevation_m": point.elevation_m,
                 "heart_rate": point.heart_rate,
+                "speed_mps": point.speed_mps,
+                "cadence_spm": point.cadence_spm,
             }
             for point in normalized.track_points
         ]

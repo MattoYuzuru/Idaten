@@ -50,3 +50,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build backend
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew spotlessCheck
+      - run: ./gradlew testDebugUnitTest
+      - run: ./gradlew assembleDebug
+      - run: ./gradlew lintDebug
