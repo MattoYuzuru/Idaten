@@ -9,6 +9,7 @@ import dev.idaten.companion.data.DeviceRepository
 import dev.idaten.companion.data.DeviceStatusResponse
 import dev.idaten.companion.data.SyncRequest
 import dev.idaten.companion.health.HealthConnectSource
+import dev.idaten.companion.health.HealthOnboardingState
 import dev.idaten.companion.model.HealthConnectMapper
 import dev.idaten.companion.model.PermissionState
 import dev.idaten.companion.model.RunItem
@@ -23,11 +24,15 @@ data class MainUiState(
     val linking: Boolean = false,
     val linkCode: String = "",
     val status: DeviceStatusResponse? = null,
+    val healthState: HealthOnboardingState = HealthOnboardingState.CHECKING,
     val permissionState: PermissionState? = null,
     val runs: List<RunItem> = emptyList(),
     val loadingRuns: Boolean = false,
     val syncing: Boolean = false,
-    val message: String? = null,
+    val permissionRequestInFlight: Boolean = false,
+    val providerActionInFlight: Boolean = false,
+    val healthMessage: String? = null,
+    val backendMessage: String? = null,
 )
 
 class MainViewModel(
@@ -37,24 +42,25 @@ class MainViewModel(
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(MainUiState(linked = devices.isLinked()))
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
+    private var healthRefreshInFlight = false
 
     init {
-        refreshPermissions()
+        refreshHealth()
         if (devices.isLinked()) refreshStatus()
     }
 
     fun updateLinkCode(value: String) {
-        mutableState.value = mutableState.value.copy(linkCode = value.take(16), message = null)
+        mutableState.value = mutableState.value.copy(linkCode = value.take(16), backendMessage = null)
     }
 
     fun link() =
         viewModelScope.launch {
             val code = state.value.linkCode.trim()
             if (code.isEmpty()) {
-                mutableState.value = state.value.copy(message = "Enter the code from Telegram")
+                mutableState.value = state.value.copy(backendMessage = "Введите код из Telegram")
                 return@launch
             }
-            mutableState.value = state.value.copy(linking = true, message = null)
+            mutableState.value = state.value.copy(linking = true, backendMessage = null)
             runCatching { devices.link(code) }
                 .onSuccess {
                     mutableState.value =
@@ -62,23 +68,83 @@ class MainViewModel(
                             linked = true,
                             linking = false,
                             linkCode = "",
-                            message = "Device linked",
+                            backendMessage = "Устройство привязано",
                         )
                     refreshStatus()
                 }.onFailure { error ->
-                    mutableState.value = state.value.copy(linking = false, message = safeMessage(error))
+                    mutableState.value = state.value.copy(linking = false, backendMessage = safeMessage(error))
                 }
         }
 
-    fun refreshPermissions() =
+    fun refreshHealth() =
         viewModelScope.launch {
+            if (healthRefreshInFlight) return@launch
+            healthRefreshInFlight = true
+            mutableState.value = state.value.copy(healthState = HealthOnboardingState.CHECKING, healthMessage = null)
             val result = runCatching { health.permissionState() }
             mutableState.value =
                 state.value.copy(
                     permissionState = result.getOrNull(),
-                    message = result.exceptionOrNull()?.let(::safeMessage),
+                    healthState = result.getOrNull()?.onboardingState ?: HealthOnboardingState.UNSUPPORTED,
+                    healthMessage = result.exceptionOrNull()?.let { "Не удалось проверить Health Connect" },
                 )
+            healthRefreshInFlight = false
         }
+
+    fun requestBasePermissions(): Set<String>? {
+        val current = state.value
+        if (
+            current.healthState != HealthOnboardingState.PERMISSIONS_REQUIRED ||
+            current.permissionRequestInFlight
+        ) {
+            return null
+        }
+        val permissions = current.permissionState?.required ?: return null
+        mutableState.value = current.copy(permissionRequestInFlight = true, healthMessage = null)
+        return permissions
+    }
+
+    fun onPermissionResult(granted: Set<String>) {
+        val previous = state.value.permissionState ?: return
+        val permissionState = previous.copy(granted = granted)
+        mutableState.value =
+            state.value.copy(
+                permissionRequestInFlight = false,
+                permissionState = permissionState,
+                healthState = permissionState.onboardingState,
+                healthMessage =
+                    if (permissionState.baseGranted) {
+                        "Доступ к данным Health Connect предоставлен"
+                    } else {
+                        "Выданы не все разрешения. Их можно запросить повторно вручную."
+                    },
+            )
+    }
+
+    fun startProviderAction(): Boolean {
+        val current = state.value
+        if (
+            current.healthState != HealthOnboardingState.PROVIDER_UPDATE_REQUIRED ||
+            current.providerActionInFlight
+        ) {
+            return false
+        }
+        mutableState.value = current.copy(providerActionInFlight = true, healthMessage = null)
+        return true
+    }
+
+    fun providerActionFinished(started: Boolean = true) {
+        mutableState.value =
+            state.value.copy(
+                providerActionInFlight = false,
+                healthMessage = if (started) null else "Не удалось открыть установку или настройки Health Connect",
+            )
+        refreshHealth()
+    }
+
+    fun onForeground() {
+        refreshHealth()
+    }
 
     fun refreshStatus() =
         viewModelScope.launch {
@@ -89,13 +155,17 @@ class MainViewModel(
                         devices.unlinkLocal()
                         mutableState.value = state.value.copy(linked = false, status = null)
                     }
-                    mutableState.value = state.value.copy(message = safeMessage(error))
+                    mutableState.value = state.value.copy(backendMessage = safeMessage(error))
                 }
         }
 
     fun loadLatestRuns() =
         viewModelScope.launch {
-            mutableState.value = state.value.copy(loadingRuns = true, message = null)
+            if (state.value.healthState != HealthOnboardingState.READY) {
+                mutableState.value = state.value.copy(healthMessage = "Сначала предоставьте доступ Health Connect")
+                return@launch
+            }
+            mutableState.value = state.value.copy(loadingRuns = true, healthMessage = null)
             runCatching { health.latestRuns() }
                 .onSuccess { runs ->
                     mutableState.value =
@@ -104,7 +174,8 @@ class MainViewModel(
                             runs = runs.map { RunItem(it, mapper.map(it)) },
                         )
                 }.onFailure { error ->
-                    mutableState.value = state.value.copy(loadingRuns = false, message = safeMessage(error))
+                    mutableState.value =
+                        state.value.copy(loadingRuns = false, healthMessage = "Не удалось прочитать данные Health Connect")
                 }
         }
 
@@ -113,7 +184,7 @@ class MainViewModel(
         route: ExerciseRoute?,
     ) {
         if (route == null) {
-            mutableState.value = state.value.copy(message = "Route access was not granted")
+            mutableState.value = state.value.copy(healthMessage = "Доступ к маршруту не предоставлен")
             return
         }
         mutableState.value =
@@ -127,7 +198,7 @@ class MainViewModel(
                             item
                         }
                     },
-                message = "Route added to this sync item",
+                healthMessage = "Маршрут добавлен только к этой синхронизации",
             )
     }
 
@@ -135,10 +206,10 @@ class MainViewModel(
         viewModelScope.launch {
             val ready = state.value.runs.mapNotNull { (it.mapping as? RunMappingResult.Ready)?.activity }
             if (!state.value.linked || ready.isEmpty()) {
-                mutableState.value = state.value.copy(message = "No syncable runs")
+                mutableState.value = state.value.copy(backendMessage = "Нет пробежек для синхронизации")
                 return@launch
             }
-            mutableState.value = state.value.copy(syncing = true, message = null)
+            mutableState.value = state.value.copy(syncing = true, backendMessage = null)
             runCatching { devices.sync(SyncRequest(state.value.status?.lastSyncCursor, ready)) }
                 .onSuccess { response ->
                     val results = response.items.associateBy { it.externalId }
@@ -150,18 +221,18 @@ class MainViewModel(
                                     val result = results[item.raw.externalId]
                                     item.copy(syncStatus = result?.status, syncMessage = result?.message)
                                 },
-                            message = "Sync completed",
+                            backendMessage = "Синхронизация завершена",
                         )
                     refreshStatus()
                 }.onFailure { error ->
-                    mutableState.value = state.value.copy(syncing = false, message = safeMessage(error))
+                    mutableState.value = state.value.copy(syncing = false, backendMessage = safeMessage(error))
                 }
         }
 
     private fun safeMessage(error: Throwable): String =
         when (error) {
             is ApiException -> error.message ?: error.code
-            else -> "Operation failed"
+            else -> "Ошибка сети или backend"
         }
 
     class Factory(

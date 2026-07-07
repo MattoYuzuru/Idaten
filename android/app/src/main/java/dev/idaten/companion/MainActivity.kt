@@ -1,9 +1,11 @@
 package dev.idaten.companion
 
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -27,6 +29,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.contracts.ExerciseRouteRequestContract
@@ -37,7 +41,8 @@ import dev.idaten.companion.data.DeviceRepository
 import dev.idaten.companion.data.InstallationId
 import dev.idaten.companion.data.OkHttpIdatenApi
 import dev.idaten.companion.health.AndroidHealthConnectSource
-import dev.idaten.companion.model.HealthAvailability
+import dev.idaten.companion.health.HealthConnectExternalActions
+import dev.idaten.companion.health.HealthOnboardingState
 import dev.idaten.companion.model.RunItem
 import dev.idaten.companion.model.RunMappingResult
 
@@ -55,22 +60,31 @@ class MainActivity : ComponentActivity() {
     private lateinit var routeRecordId: String
     private lateinit var permissionLauncher: ActivityResultLauncher<Set<String>>
     private lateinit var routeLauncher: ActivityResultLauncher<String>
+    private lateinit var providerLauncher: ActivityResultLauncher<android.content.Intent>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         permissionLauncher =
             registerForActivityResult(
                 PermissionController.createRequestPermissionResultContract(),
-            ) { viewModel.refreshPermissions() }
+                viewModel::onPermissionResult,
+            )
         routeLauncher =
             registerForActivityResult(ExerciseRouteRequestContract()) { route: ExerciseRoute? ->
                 if (::routeRecordId.isInitialized) viewModel.attachRoute(routeRecordId, route)
+            }
+        providerLauncher =
+            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+                viewModel.providerActionFinished()
             }
         setContent {
             MaterialTheme {
                 idatenApp(
                     viewModel = viewModel,
-                    requestPermissions = { permissionLauncher.launch(health.basePermissions) },
+                    requestPermissions = {
+                        viewModel.requestBasePermissions()?.let(permissionLauncher::launch)
+                    },
+                    openProvider = ::openHealthConnect,
                     requestRoute = { recordId ->
                         routeRecordId = recordId
                         routeLauncher.launch(recordId)
@@ -78,6 +92,24 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.onForeground()
+    }
+
+    private fun openHealthConnect() {
+        if (!viewModel.startProviderAction()) return
+        val action =
+            HealthConnectExternalActions.firstResolvable(Build.VERSION.SDK_INT) { candidate ->
+                candidate.toIntent().resolveActivity(packageManager) != null
+            }
+        if (action == null) {
+            viewModel.providerActionFinished(started = false)
+            return
+        }
+        providerLauncher.launch(action.toIntent())
     }
 }
 
@@ -87,6 +119,7 @@ private enum class Screen { LINK, STATUS, RUNS }
 fun idatenApp(
     viewModel: MainViewModel,
     requestPermissions: () -> Unit,
+    openProvider: () -> Unit,
     requestRoute: (String) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -95,14 +128,21 @@ fun idatenApp(
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Screen.entries.forEach { item ->
-                    TextButton(onClick = { screen = item }) { Text(item.name.lowercase()) }
+                    TextButton(onClick = { screen = item }) { Text(item.title()) }
                 }
             }
-            state.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+            state.healthMessage?.let { Text(it, color = MaterialTheme.colorScheme.tertiary) }
+            state.backendMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
             Spacer(Modifier.height(12.dp))
             when (screen) {
                 Screen.LINK -> linkScreen(state, viewModel::updateLinkCode, viewModel::link)
-                Screen.STATUS -> statusScreen(state, requestPermissions, viewModel::refreshStatus)
+                Screen.STATUS ->
+                    statusScreen(
+                        state,
+                        requestPermissions,
+                        openProvider,
+                        viewModel::refreshStatus,
+                    )
                 Screen.RUNS ->
                     runsScreen(
                         state,
@@ -115,52 +155,90 @@ fun idatenApp(
     }
 }
 
+private fun Screen.title(): String =
+    when (this) {
+        Screen.LINK -> "Привязка"
+        Screen.STATUS -> "Статус"
+        Screen.RUNS -> "Пробежки"
+    }
+
 @Composable
 private fun linkScreen(
     state: MainUiState,
     updateCode: (String) -> Unit,
     link: () -> Unit,
 ) {
-    Text("Link device", style = MaterialTheme.typography.headlineSmall)
-    Text("Open Idaten in Telegram, run /link, then enter the one-time code.")
+    Text("Привязка устройства", style = MaterialTheme.typography.headlineSmall)
+    Text("Откройте личный чат с Idaten в Telegram, выполните /link и введите одноразовый код.")
     OutlinedTextField(
         value = state.linkCode,
         onValueChange = updateCode,
-        label = { Text("Telegram link code") },
+        label = { Text("Код из Telegram") },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Одноразовый код привязки" },
     )
-    Button(onClick = link, enabled = !state.linking) { Text("Link") }
+    Button(
+        onClick = link,
+        enabled = !state.linking,
+        modifier = Modifier.semantics { contentDescription = "Привязать устройство к Idaten" },
+    ) {
+        Text(if (state.linking) "Привязка…" else "Привязать")
+    }
 }
 
 @Composable
 private fun statusScreen(
     state: MainUiState,
     requestPermissions: () -> Unit,
+    openProvider: () -> Unit,
     refresh: () -> Unit,
 ) {
-    Text("Status", style = MaterialTheme.typography.headlineSmall)
-    Text(if (state.linked) "Device linked" else "Device not linked")
+    Text("Статус", style = MaterialTheme.typography.headlineSmall)
+    Text(if (state.linked) "Устройство привязано" else "Устройство не привязано")
     state.status?.let {
         Text("${it.name} · ${it.scope}")
-        Text("Last sync: ${it.lastSyncStatus}${it.lastSyncAt?.let { time -> " · $time" }.orEmpty()}")
+        Text("Последняя синхронизация: ${it.lastSyncStatus}${it.lastSyncAt?.let { time -> " · $time" }.orEmpty()}")
     }
-    when (state.permissionState?.healthConnect) {
-        HealthAvailability.AVAILABLE ->
+    when (state.healthState) {
+        HealthOnboardingState.CHECKING -> Text("Проверяем Health Connect…")
+        HealthOnboardingState.PROVIDER_UPDATE_REQUIRED -> {
             Text(
-                if (state.permissionState.baseGranted) {
-                    "Health Connect permissions granted"
+                if (Build.VERSION.SDK_INT >= 34) {
+                    "Требуется обновить системный модуль Health Connect в настройках устройства."
                 } else {
-                    "Health Connect permissions required"
+                    "Health Connect не установлен или требует обновления."
                 },
             )
-        HealthAvailability.UPDATE_REQUIRED -> Text("Health Connect provider update required")
-        HealthAvailability.UNAVAILABLE -> Text("Health Connect unavailable")
-        null -> Text("Checking Health Connect")
+            Button(
+                onClick = openProvider,
+                enabled = !state.providerActionInFlight,
+                modifier = Modifier.semantics { contentDescription = "Установить или обновить Health Connect" },
+            ) {
+                Text(if (Build.VERSION.SDK_INT >= 34) "Открыть настройки Health Connect" else "Установить или обновить")
+            }
+        }
+        HealthOnboardingState.UNSUPPORTED ->
+            Text(
+                "Health Connect недоступен. Нужен Android 9 или новее с Google Play Services; рабочие профили не поддерживаются.",
+            )
+        HealthOnboardingState.PERMISSIONS_REQUIRED -> {
+            Text("Нужен доступ только на чтение: тренировки, дистанция, пульс, скорость, каденс и набор высоты.")
+            Text("Маршрут не входит в этот запрос и подтверждается отдельно для каждой пробежки.")
+            Button(
+                onClick = requestPermissions,
+                enabled = !state.permissionRequestInFlight,
+                modifier = Modifier.semantics { contentDescription = "Запросить разрешения Health Connect" },
+            ) {
+                Text(if (state.permissionRequestInFlight) "Ожидаем ответ…" else "Предоставить доступ")
+            }
+        }
+        HealthOnboardingState.READY -> Text("Health Connect готов к чтению пробежек")
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = requestPermissions) { Text("Permissions") }
-        Button(onClick = refresh) { Text("Refresh") }
+    Button(
+        onClick = refresh,
+        modifier = Modifier.semantics { contentDescription = "Обновить статус backend" },
+    ) {
+        Text("Проверить backend")
     }
 }
 
@@ -171,9 +249,10 @@ private fun runsScreen(
     sync: () -> Unit,
     requestRoute: (String) -> Unit,
 ) {
+    val healthReady = state.healthState == HealthOnboardingState.READY
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = load, enabled = !state.loadingRuns) { Text("Latest runs") }
-        Button(onClick = sync, enabled = state.linked && !state.syncing) { Text("Manual Sync") }
+        Button(onClick = load, enabled = healthReady && !state.loadingRuns) { Text("Последние пробежки") }
+        Button(onClick = sync, enabled = healthReady && state.linked && !state.syncing) { Text("Синхронизировать") }
     }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(state.runs, key = { it.raw.externalId }) { item -> runRow(item, requestRoute) }
@@ -186,15 +265,15 @@ private fun runRow(
     requestRoute: (String) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
-        Text(item.raw.title ?: "Run", style = MaterialTheme.typography.titleMedium)
-        Text("${item.raw.startedAt} · ${item.raw.distanceMeters ?: "distance unavailable"} m")
+        Text(item.raw.title ?: "Пробежка", style = MaterialTheme.typography.titleMedium)
+        Text("${item.raw.startedAt} · ${item.raw.distanceMeters ?: "дистанция недоступна"} м")
         when (val mapping = item.mapping) {
             is RunMappingResult.Invalid -> Text(mapping.reason, color = MaterialTheme.colorScheme.error)
-            is RunMappingResult.Ready -> Text(item.syncStatus ?: "Ready")
+            is RunMappingResult.Ready -> Text(item.syncStatus ?: "Готово к синхронизации")
         }
         item.syncMessage?.let { Text(it) }
         item.raw.routeConsentRecordId?.let { recordId ->
-            TextButton(onClick = { requestRoute(recordId) }) { Text("Allow route for this run") }
+            TextButton(onClick = { requestRoute(recordId) }) { Text("Разрешить маршрут для этой пробежки") }
         }
     }
 }

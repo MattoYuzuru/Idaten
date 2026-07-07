@@ -54,16 +54,12 @@ class AndroidHealthConnectSource(
     private val client: HealthConnectClient
         get() = HealthConnectClient.getOrCreate(context)
 
-    override fun availability(): HealthAvailability =
-        when (HealthConnectClient.getSdkStatus(context)) {
-            HealthConnectClient.SDK_AVAILABLE -> HealthAvailability.AVAILABLE
-            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> HealthAvailability.UPDATE_REQUIRED
-            else -> HealthAvailability.UNAVAILABLE
-        }
+    override fun availability(): HealthAvailability = HealthAvailabilityMapper.fromSdkStatus(HealthConnectClient.getSdkStatus(context))
 
     override suspend fun permissionState(): PermissionState {
-        if (availability() != HealthAvailability.AVAILABLE) {
-            return PermissionState(availability(), emptySet(), basePermissions, routeGranted = false)
+        val availability = availability()
+        if (availability != HealthAvailability.AVAILABLE) {
+            return PermissionState(availability, emptySet(), basePermissions, routeGranted = false)
         }
         val granted = client.permissionController.getGrantedPermissions()
         return PermissionState(
