@@ -211,9 +211,9 @@ def format_recommendation(recommendation: WorkoutRecommendation) -> str:
         )
     flags = ", ".join(recommendation.risk_flags) or "нет"
     return (
-        "Следующая тренировка\n\n"
+        "<b>Следующая тренировка</b>\n\n"
         f"Тип: {recommendation.workout_type.value}\n"
-        f"Дистанция: {recommendation.distance_m / 1000:.2f} км\n"
+        f"Дистанция: <b>{recommendation.distance_m / 1000:.2f} км</b>\n"
         f"Длительность: {format_duration(recommendation.duration_sec)}\n"
         f"Темп: {pace}\nПричина: {recommendation.reason}\nРиски: {flags}"
     )
@@ -227,8 +227,9 @@ def format_week(facts: CoachFacts) -> str:
     )
     risks = ", ".join(facts.risk_flags) or "нет"
     return (
-        "Текущая неделя\n\n"
-        f"Пробежек: {facts.week.run_count}\nДистанция: {facts.week.distance_m / 1000:.2f} км\n"
+        "<b>Текущая неделя</b>\n\n"
+        f"Пробежек: {facts.week.run_count}\n"
+        f"Дистанция: <b>{facts.week.distance_m / 1000:.2f} км</b>\n"
         f"Longest 7d/30d/all: {facts.last_7d.longest_run_m / 1000:.2f}/"
         f"{facts.last_30d.longest_run_m / 1000:.2f}/{facts.all_time_longest_m / 1000:.2f} км\n"
         f"Средний темп 30d: {pace}\nРиски: {risks}"
@@ -236,7 +237,7 @@ def format_week(facts: CoachFacts) -> str:
 
 
 def format_plan(goal: TrainingGoal, baseline_m: int, workouts: tuple[PlanWorkout, ...]) -> str:
-    lines = [f"План {goal.value}", f"Baseline: {baseline_m / 1000:.1f} км/нед."]
+    lines = [f"<b>План {goal.value}</b>", f"Baseline: {baseline_m / 1000:.1f} км/нед."]
     lines.extend(
         f"{item.week_index}. {item.recommendation.workout_type.value} "
         f"{item.recommendation.distance_m / 1000:.1f} км — {item.recommendation.reason}"

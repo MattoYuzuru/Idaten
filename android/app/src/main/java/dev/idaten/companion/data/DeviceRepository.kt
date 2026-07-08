@@ -10,6 +10,7 @@ class DeviceRepository(
     private val installationId: () -> String,
     private val deviceName: () -> String = { Build.MANUFACTURER.ifBlank { "Android" } },
     private val deviceModel: () -> String = { Build.MODEL.ifBlank { "Android device" } },
+    private val syncBatchStore: SyncBatchStore = InMemorySyncBatchStore(),
 ) {
     fun isLinked(): Boolean = tokenStore.read() != null
 
@@ -31,7 +32,15 @@ class DeviceRepository(
 
     suspend fun sync(request: SyncRequest): SyncResponse = api.sync(requireToken(), request)
 
-    fun unlinkLocal() = tokenStore.clear()
+    fun beginSyncBatch(): String =
+        syncBatchStore.read() ?: UUID.randomUUID().toString().also(syncBatchStore::write)
+
+    fun completeSyncBatch() = syncBatchStore.clear()
+
+    fun unlinkLocal() {
+        tokenStore.clear()
+        syncBatchStore.clear()
+    }
 
     private fun requireToken(): String =
         tokenStore.read() ?: throw ApiException(

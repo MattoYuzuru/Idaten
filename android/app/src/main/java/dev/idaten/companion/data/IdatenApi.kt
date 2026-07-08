@@ -31,6 +31,7 @@ data class LinkCompleteResponse(
 @Serializable
 data class SyncRequest(
     val cursor: String? = null,
+    @SerialName("batch_id") val batchId: String? = null,
     val activities: List<SyncActivityDto>,
 )
 

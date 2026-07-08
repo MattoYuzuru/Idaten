@@ -75,7 +75,8 @@ async def test_manual_run_updates_stats_week_pr_and_report(
     )
 
     assert result.activity.avg_pace_sec_per_km == 375
-    assert "10.02 км · 1:02:41 · 6:15/км" in result.report_message
+    assert "<b>10.02 км</b> · 1:02:41 · <b>6:15/км</b>" in result.report_message
+    assert "1-я пробежка на неделе 6–12 июля" in result.report_message
     assert result.week_stats.run_count == 1
 
     stats = await services.activities.stats(42)

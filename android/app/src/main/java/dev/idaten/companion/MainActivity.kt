@@ -47,6 +47,7 @@ import dev.idaten.companion.data.AndroidKeystoreTokenStore
 import dev.idaten.companion.data.DeviceRepository
 import dev.idaten.companion.data.InstallationId
 import dev.idaten.companion.data.OkHttpIdatenApi
+import dev.idaten.companion.data.PreferencesSyncBatchStore
 import dev.idaten.companion.health.AndroidHealthConnectSource
 import dev.idaten.companion.health.HealthConnectExternalActions
 import dev.idaten.companion.health.HealthOnboardingState
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
             api = OkHttpIdatenApi(BuildConfig.IDATEN_BASE_URL),
             tokenStore = AndroidKeystoreTokenStore(this),
             installationId = installationId::get,
+            syncBatchStore = PreferencesSyncBatchStore(this),
         )
     }
     private val viewModel by viewModels<MainViewModel> { MainViewModel.Factory(devices, health) }

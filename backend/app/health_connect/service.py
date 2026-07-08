@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.activities.models import Activity, ActivityVisibility, CoachReport, ReportType, SourceType
 from app.activities.repository import ActivityRepository
 from app.activities.schemas import ActivitySummary
-from app.analytics.metrics import calculate_pace_sec_per_km, calculate_speed_mps, local_week_bounds
+from app.analytics.metrics import (
+    calculate_pace_sec_per_km,
+    calculate_speed_mps,
+    format_local_week_period,
+    local_week_bounds,
+)
 from app.coach.report_builder import build_after_run_report
 from app.ingestion.adapters.track import build_splits
 from app.ingestion.models import ActivitySeries, ActivitySplit
@@ -259,7 +264,12 @@ class HealthConnectService:
             device.revoked_at = datetime.now(UTC)
 
     async def sync(
-        self, token: str, runs: tuple[HealthConnectRun, ...], cursor: str | None
+        self,
+        token: str,
+        runs: tuple[HealthConnectRun, ...],
+        cursor: str | None,
+        *,
+        batch_id: str | None = None,
     ) -> SyncBatchResult:
         if not runs:
             raise HealthConnectError("Batch не должен быть пустым.", code="EMPTY_BATCH")
@@ -306,6 +316,7 @@ class HealthConnectService:
                 user_id=user_id,
                 runs=ordered_runs,
                 results=tuple(results),
+                client_batch_id=batch_id,
             )
         return SyncBatchResult(
             tuple(results), result_cursor, saved_count, duplicate_count, 0, error_count
@@ -446,7 +457,11 @@ class HealthConnectService:
                 week_stats = await activity_repository.aggregate(
                     user_id, started_from=week_start, started_before=week_end
                 )
-                report = build_after_run_report(summary, week_stats)
+                report = build_after_run_report(
+                    summary,
+                    week_stats,
+                    format_local_week_period(week_start, week_end, user.timezone),
+                )
                 repository.add(
                     CoachReport(
                         user_id=user_id,
@@ -489,8 +504,9 @@ class HealthConnectService:
         user_id: uuid.UUID,
         runs: tuple[HealthConnectRun, ...],
         results: tuple[SyncItemResult, ...],
+        client_batch_id: str | None,
     ) -> None:
-        identity = "\n".join(sorted(run.external_id for run in runs))
+        identity = client_batch_id or "\n".join(sorted(run.external_id for run in runs))
         batch_key = hashlib.sha256(f"{device_id}\n{identity}".encode()).hexdigest()
         saved_ids = tuple(
             item.activity_id

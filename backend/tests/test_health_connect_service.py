@@ -340,8 +340,8 @@ async def test_multi_sync_is_chronological_and_summary_is_idempotent(
         elapsed_time_sec=1_800,
     )
 
-    first = await services.health_connect.sync(token, (newer, older), None)
-    second = await services.health_connect.sync(token, (older, newer), None)
+    first = await services.health_connect.sync(token, (newer, older), None, batch_id="delivery-1")
+    second = await services.health_connect.sync(token, (older, newer), None, batch_id="delivery-1")
 
     assert [item.external_id for item in first.items] == ["older", "newer"]
     assert all(item.state == SyncItemState.SAVED for item in first.items)

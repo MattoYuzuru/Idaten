@@ -82,6 +82,7 @@ def test_link_sync_status_and_safe_item_error(tmp_path: Path) -> None:
             headers={"Authorization": f"Bearer {token}"},
             json={
                 "cursor": "cursor-1",
+                "batch_id": "api-delivery-1",
                 "activities": [
                     {
                         "external_id": "api-valid",

@@ -265,26 +265,35 @@ class MainViewModel(
                 return@launch
             }
             mutableState.value = state.value.copy(syncing = true, backendMessage = null)
-            runCatching { devices.sync(SyncRequest(state.value.status?.lastSyncCursor, ready)) }
-                .onSuccess { response ->
-                    val results = response.items.associateBy { it.externalId }
-                    mutableState.value =
-                        state.value.copy(
-                            syncing = false,
-                            runs =
-                                state.value.runs.map { item ->
-                                    val result = results[item.raw.externalId]
-                                    item.copy(syncStatus = result?.status, syncMessage = result?.message)
-                                },
-                            backendMessage =
-                                "Синхронизация: сохранено ${response.counts.saved}, " +
-                                    "дубли ${response.counts.duplicate}, пропущено ${response.counts.skipped}, " +
-                                    "ошибок ${response.counts.error}",
-                        )
-                    refreshStatus()
-                }.onFailure { error ->
-                    mutableState.value = state.value.copy(syncing = false, backendMessage = safeMessage(error))
-                }
+            val batchId = devices.beginSyncBatch()
+            runCatching {
+                devices.sync(
+                    SyncRequest(
+                        cursor = state.value.status?.lastSyncCursor,
+                        batchId = batchId,
+                        activities = ready,
+                    ),
+                )
+            }.onSuccess { response ->
+                devices.completeSyncBatch()
+                val results = response.items.associateBy { it.externalId }
+                mutableState.value =
+                    state.value.copy(
+                        syncing = false,
+                        runs =
+                            state.value.runs.map { item ->
+                                val result = results[item.raw.externalId]
+                                item.copy(syncStatus = result?.status, syncMessage = result?.message)
+                            },
+                        backendMessage =
+                            "Синхронизация: сохранено ${response.counts.saved}, " +
+                                "дубли ${response.counts.duplicate}, пропущено ${response.counts.skipped}, " +
+                                "ошибок ${response.counts.error}",
+                    )
+                refreshStatus()
+            }.onFailure { error ->
+                mutableState.value = state.value.copy(syncing = false, backendMessage = safeMessage(error))
+            }
         }
 
     private fun safeMessage(error: Throwable): String =

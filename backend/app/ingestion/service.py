@@ -19,6 +19,7 @@ from app.activities.schemas import ActivitySummary
 from app.analytics.metrics import (
     calculate_pace_sec_per_km,
     calculate_speed_mps,
+    format_local_week_period,
     local_week_bounds,
 )
 from app.coach.report_builder import build_after_run_report
@@ -301,7 +302,11 @@ class ImportService:
             week_stats = await activity_repository.aggregate(
                 user.id, started_from=week_start, started_before=week_end
             )
-            report = build_after_run_report(summary, week_stats)
+            report = build_after_run_report(
+                summary,
+                week_stats,
+                format_local_week_period(week_start, week_end, user.timezone),
+            )
             repository.add(
                 CoachReport(
                     user_id=user.id,
