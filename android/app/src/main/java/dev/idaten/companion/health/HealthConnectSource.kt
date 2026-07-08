@@ -46,10 +46,10 @@ class AndroidHealthConnectSource(
             HealthPermission.getReadPermission(DistanceRecord::class),
             HealthPermission.getReadPermission(HeartRateRecord::class),
             HealthPermission.getReadPermission(SpeedRecord::class),
-            HealthPermission.getReadPermission(StepsCadenceRecord::class),
             HealthPermission.getReadPermission(ElevationGainedRecord::class),
         )
     override val routePermission: String = "android.permission.health.READ_EXERCISE_ROUTES"
+    private val cadencePermission = HealthPermission.getReadPermission(StepsCadenceRecord::class)
 
     private val client: HealthConnectClient
         get() = HealthConnectClient.getOrCreate(context)
@@ -84,12 +84,13 @@ class AndroidHealthConnectSource(
                     ),
                 ).records
                 .filter { it.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_RUNNING }
-        return sessions.map { session -> readRun(session, state.canReadRoute) }
+        return sessions.map { session -> readRun(session, state.canReadRoute, cadencePermission in state.granted) }
     }
 
     private suspend fun readRun(
         session: ExerciseSessionRecord,
         routePermissionGranted: Boolean,
+        cadencePermissionGranted: Boolean,
     ): RawHealthRun {
         val range = TimeRangeFilter.between(session.startTime, session.endTime)
         val origins = setOf(session.metadata.dataOrigin)
@@ -111,11 +112,15 @@ class AndroidHealthConnectSource(
                 ).records
                 .flatMap { record -> record.samples }
         val cadences =
-            client
-                .readRecords(
-                    ReadRecordsRequest(StepsCadenceRecord::class, range, origins),
-                ).records
-                .flatMap { record -> record.samples }
+            if (cadencePermissionGranted) {
+                client
+                    .readRecords(
+                        ReadRecordsRequest(StepsCadenceRecord::class, range, origins),
+                    ).records
+                    .flatMap { record -> record.samples }
+            } else {
+                emptyList()
+            }
         val elevations =
             client
                 .readRecords(

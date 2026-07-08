@@ -6,6 +6,7 @@ import androidx.health.connect.client.HealthConnectClient
 import dev.idaten.companion.health.HealthAvailabilityMapper
 import dev.idaten.companion.health.HealthConnectExternalActions
 import dev.idaten.companion.model.HealthAvailability
+import dev.idaten.companion.model.PermissionState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -54,5 +55,21 @@ class HealthConnectOnboardingTest {
     fun noHandlerProducesNoExternalAction() {
         assertNull(HealthConnectExternalActions.firstResolvable(33) { false })
         assertEquals(Intent.ACTION_VIEW, HealthConnectExternalActions.candidates(33).first().action)
+    }
+
+    @Test
+    fun optionalCadencePermissionDoesNotBlockReadyState() {
+        val required = setOf("exercise", "distance", "heart_rate", "speed", "elevation")
+        val state =
+            PermissionState(
+                healthConnect = HealthAvailability.AVAILABLE,
+                granted = required,
+                required = required,
+                routeGranted = false,
+            )
+
+        assertEquals(required, state.grantedBasePermissions)
+        assertEquals(emptySet<String>(), state.missingBasePermissions)
+        assertEquals(dev.idaten.companion.health.HealthOnboardingState.READY, state.onboardingState)
     }
 }

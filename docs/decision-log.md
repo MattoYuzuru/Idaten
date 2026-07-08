@@ -114,3 +114,17 @@
   deployment с проверенным release commit, а reuse существующей инфраструктуры экономит
   ресурсы малого VPS. Один replica исключает одновременный Telegram polling и periodic
   jobs; отдельные DB/user/namespace/secret/storage изолируют Idaten от других workloads.
+
+## ADR-012 — cadence как optional Health Connect permission
+
+- Дата: 2026-07-08
+- Статус: принято
+- Решение: Android companion больше не считает `StepsCadenceRecord` обязательным
+  permission для состояния `READY`. Приложение запрашивает базовые read permissions для
+  exercise session, distance, heart rate, speed и elevation; cadence samples читаются
+  только если Health Connect уже выдал соответствующий доступ. Отсутствие cadence не
+  блокирует загрузку пробежек или ручную синхронизацию.
+- Причина: manual acceptance на реальном устройстве показал состояние 5/6 permissions,
+  где Health Connect не позволял пользователю выдать cadence, из-за чего весь sync flow
+  оставался недоступен. Cadence является дополнительным sample, а не обязательным полем
+  Activity; отсутствие optional sample уже поддерживается backend ingestion.
