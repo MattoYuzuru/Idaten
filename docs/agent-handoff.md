@@ -54,6 +54,10 @@ Release blocker: физический Android не подключен (`adb devi
 поэтому device checklist и live Telegram UX acceptance не выполнены. Не создавать
 `v0.7.0` и не менять production digest до этой проверки.
 
+- Draft PR: https://github.com/MattoYuzuru/Idaten/pull/11.
+- CI run `28974031553` прошел: backend, signed Android release/apksigner, image и
+  deployment jobs green.
+
 Логические коммиты MVP 0.7: `8cc0c45`, `927998a`, `025672c`, `a645cf8`, `4c310fd`,
 `702fbe6`, `f6fdaaa`, `7ed9d42`.
 

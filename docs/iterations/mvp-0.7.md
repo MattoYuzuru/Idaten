@@ -381,9 +381,9 @@ JSON draft допустим только для действительно optio
 - [x] `/start`, `/menu`, post-link onboarding и next actions реализованы.
 - [x] HTML presentation, pagination и privacy-safe formatting применены.
 - [x] Полный `/help` и scoped command menus синхронизированы.
-- [ ] Backend/Android/PostgreSQL/Docker gates пройдены.
+- [x] Backend/Android/PostgreSQL/Docker gates пройдены.
 - [ ] Physical-device и Telegram UX acceptance пройдены.
-- [ ] README/deployment/handoff обновлены, draft PR опубликован.
+- [x] README/deployment/handoff обновлены, draft PR опубликован.
 
 ## Результат pre-production gate
 
@@ -395,6 +395,8 @@ JSON draft допустим только для действительно optio
 - Docker Compose: image build, migrations, `/health` и `/ready` прошли; volumes и
   containers удалены после smoke.
 - Deployment: provisioning unit tests, shellcheck и kustomize assertions прошли.
+- GitHub PR #11 CI run `28974031553`: backend, Android signed release/APK verification,
+  image и deployment jobs прошли.
 - Bot API 10.1 spike: aiogram 3.29.1 содержит `sendRichMessage`, но целевые Telegram
   клиенты не подтверждены; выбран обязательный HTML fallback без streaming rich drafts.
 
