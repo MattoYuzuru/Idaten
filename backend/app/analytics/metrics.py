@@ -45,3 +45,29 @@ def local_week_bounds(moment: datetime, timezone_name: str) -> tuple[datetime, d
         hour=0, minute=0, second=0, microsecond=0
     )
     return local_start.astimezone(UTC), (local_start + timedelta(days=7)).astimezone(UTC)
+
+
+def format_local_week_period(start: datetime, end: datetime, timezone_name: str) -> str:
+    timezone = ZoneInfo(timezone_name)
+    local_start = start.astimezone(timezone).date()
+    local_end = (end - timedelta(microseconds=1)).astimezone(timezone).date()
+    months = (
+        "января",
+        "февраля",
+        "марта",
+        "апреля",
+        "мая",
+        "июня",
+        "июля",
+        "августа",
+        "сентября",
+        "октября",
+        "ноября",
+        "декабря",
+    )
+    if local_start.month == local_end.month:
+        return f"{local_start.day}–{local_end.day} {months[local_end.month - 1]}"
+    return (
+        f"{local_start.day} {months[local_start.month - 1]}–"
+        f"{local_end.day} {months[local_end.month - 1]}"
+    )

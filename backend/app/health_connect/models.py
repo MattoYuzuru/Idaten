@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -83,14 +84,50 @@ class Device(TimestampMixin, Base):
     last_sync_error: Mapped[str | None] = mapped_column(String(64))
 
 
+class HealthConnectSyncBatch(Base):
+    __tablename__ = "health_connect_sync_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "found_count >= 0 AND saved_count >= 0 AND duplicate_count >= 0 "
+            "AND skipped_count >= 0 AND error_count >= 0",
+            name="counts_nonnegative",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    batch_key: Mapped[str] = mapped_column(String(64), unique=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    found_count: Mapped[int] = mapped_column(Integer)
+    saved_count: Mapped[int] = mapped_column(Integer)
+    duplicate_count: Mapped[int] = mapped_column(Integer)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_count: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class TelegramOutbox(Base):
     __tablename__ = "telegram_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN activity_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN batch_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN event_key IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="exactly_one_subject",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    activity_id: Mapped[uuid.UUID] = mapped_column(
+    activity_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("activities.id", ondelete="CASCADE"), unique=True
     )
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("health_connect_sync_batches.id", ondelete="CASCADE"), unique=True
+    )
+    event_key: Mapped[str | None] = mapped_column(String(128), unique=True)
     private_chat_id: Mapped[int] = mapped_column(BigInteger)
     message_text: Mapped[str] = mapped_column(String(4096))
     status: Mapped[OutboxStatus] = mapped_column(

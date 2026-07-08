@@ -44,6 +44,8 @@ class NormalizedActivity:
     external_id: str | None = None
     avg_hr: int | None = None
     max_hr: int | None = None
+    avg_cadence_spm: int | None = None
+    elevation_gain_m: int | None = None
     splits: tuple[NormalizedSplit, ...] = ()
     track_points: tuple[TrackPoint, ...] = ()
 
@@ -60,6 +62,8 @@ class NormalizedActivity:
             "external_id": self.external_id,
             "avg_hr": self.avg_hr,
             "max_hr": self.max_hr,
+            "avg_cadence_spm": self.avg_cadence_spm,
+            "elevation_gain_m": self.elevation_gain_m,
             "splits": [asdict(split) for split in self.splits],
         }
 
@@ -84,6 +88,14 @@ class NormalizedActivity:
             ),
             avg_hr=int(value["avg_hr"]) if value.get("avg_hr") is not None else None,
             max_hr=int(value["max_hr"]) if value.get("max_hr") is not None else None,
+            avg_cadence_spm=(
+                int(value["avg_cadence_spm"]) if value.get("avg_cadence_spm") is not None else None
+            ),
+            elevation_gain_m=(
+                int(value["elevation_gain_m"])
+                if value.get("elevation_gain_m") is not None
+                else None
+            ),
             splits=tuple(
                 NormalizedSplit(
                     index=int(item["index"]),
@@ -176,6 +188,8 @@ def apply_overrides(
         external_id=activity.external_id,
         avg_hr=activity.avg_hr,
         max_hr=activity.max_hr,
+        avg_cadence_spm=activity.avg_cadence_spm,
+        elevation_gain_m=activity.elevation_gain_m,
         splits=activity.splits if overrides.distance_m is None else (),
     )
 
@@ -205,6 +219,12 @@ def validate_normalized(activity: NormalizedActivity) -> None:
         and activity.avg_hr > activity.max_hr
     ):
         raise ImportError("Средний пульс не может быть выше максимального.", code="INVALID_HR")
+    if activity.avg_cadence_spm is not None and not 30 <= activity.avg_cadence_spm <= 300:
+        raise ImportError("Каденс находится вне допустимого диапазона.", code="INVALID_CADENCE")
+    if activity.elevation_gain_m is not None and not 0 <= activity.elevation_gain_m <= 20_000:
+        raise ImportError(
+            "Набор высоты находится вне допустимого диапазона.", code="INVALID_ELEVATION"
+        )
     for expected_index, split in enumerate(activity.splits, start=1):
         if split.index != expected_index or split.distance_m <= 0 or split.elapsed_time_sec <= 0:
             raise ImportError("Некорректные splits.", code="INVALID_SPLITS")

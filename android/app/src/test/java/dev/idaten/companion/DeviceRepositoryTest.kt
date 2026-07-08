@@ -4,6 +4,7 @@ import dev.idaten.companion.data.ApiException
 import dev.idaten.companion.data.DeviceRepository
 import dev.idaten.companion.data.DeviceStatusResponse
 import dev.idaten.companion.data.IdatenApi
+import dev.idaten.companion.data.InMemorySyncBatchStore
 import dev.idaten.companion.data.InMemoryTokenStore
 import dev.idaten.companion.data.LinkCompleteRequest
 import dev.idaten.companion.data.LinkCompleteResponse
@@ -35,6 +36,30 @@ class DeviceRepositoryTest {
         runTest {
             DeviceRepository(FakeApi(), InMemoryTokenStore(), { "installation" }).status()
         }
+
+    @Test
+    fun batchIdentitySurvivesRepositoryRestartUntilSuccess() {
+        val store = InMemorySyncBatchStore()
+        val first =
+            DeviceRepository(
+                FakeApi(),
+                InMemoryTokenStore(),
+                { "installation" },
+                syncBatchStore = store,
+            )
+        val batchId = first.beginSyncBatch()
+        val restarted =
+            DeviceRepository(
+                FakeApi(),
+                InMemoryTokenStore(),
+                { "installation" },
+                syncBatchStore = store,
+            )
+
+        assertEquals(batchId, restarted.beginSyncBatch())
+        restarted.completeSyncBatch()
+        assertTrue(batchId != restarted.beginSyncBatch())
+    }
 
     private class FakeApi : IdatenApi {
         var lastLink: LinkCompleteRequest? = null

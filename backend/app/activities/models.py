@@ -79,6 +79,14 @@ class Activity(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("distance_m > 0", name="distance_positive"),
         CheckConstraint("elapsed_time_sec > 0", name="elapsed_positive"),
+        CheckConstraint(
+            "avg_cadence_spm IS NULL OR (avg_cadence_spm >= 30 AND avg_cadence_spm <= 300)",
+            name="avg_cadence_range",
+        ),
+        CheckConstraint(
+            "elevation_gain_m IS NULL OR (elevation_gain_m >= 0 AND elevation_gain_m <= 20000)",
+            name="elevation_gain_range",
+        ),
         Index(
             "uq_activities_source_external_id",
             "source_id",
@@ -112,11 +120,86 @@ class Activity(TimestampMixin, Base):
     avg_speed_mps: Mapped[float] = mapped_column(Float)
     avg_hr: Mapped[int | None] = mapped_column(Integer)
     max_hr: Mapped[int | None] = mapped_column(Integer)
+    avg_cadence_spm: Mapped[int | None] = mapped_column(Integer)
+    elevation_gain_m: Mapped[int | None] = mapped_column(Integer)
     visibility: Mapped[ActivityVisibility] = mapped_column(
         Enum(ActivityVisibility, native_enum=False, create_constraint=True, length=24),
         default=ActivityVisibility.PRIVATE,
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ManualDraftStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    SAVED = "SAVED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+
+
+class ManualActivityDraft(TimestampMixin, Base):
+    __tablename__ = "manual_activity_drafts"
+    __table_args__ = (
+        CheckConstraint("distance_m IS NULL OR distance_m > 0", name="distance_positive"),
+        CheckConstraint(
+            "elapsed_time_sec IS NULL OR elapsed_time_sec > 0", name="elapsed_positive"
+        ),
+        CheckConstraint(
+            "moving_time_sec IS NULL OR elapsed_time_sec IS NULL OR "
+            "(moving_time_sec > 0 AND moving_time_sec <= elapsed_time_sec)",
+            name="moving_not_greater_than_elapsed",
+        ),
+        CheckConstraint(
+            "avg_hr IS NULL OR (avg_hr >= 20 AND avg_hr <= 260)",
+            name="avg_hr_range",
+        ),
+        CheckConstraint(
+            "max_hr IS NULL OR (max_hr >= 20 AND max_hr <= 260)",
+            name="max_hr_range",
+        ),
+        CheckConstraint(
+            "avg_hr IS NULL OR max_hr IS NULL OR avg_hr <= max_hr",
+            name="avg_hr_not_greater_than_max",
+        ),
+        CheckConstraint(
+            "avg_cadence_spm IS NULL OR (avg_cadence_spm >= 30 AND avg_cadence_spm <= 300)",
+            name="avg_cadence_range",
+        ),
+        CheckConstraint(
+            "elevation_gain_m IS NULL OR (elevation_gain_m >= 0 AND elevation_gain_m <= 20000)",
+            name="elevation_gain_range",
+        ),
+        Index(
+            "uq_manual_activity_drafts_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+            sqlite_where=text("status = 'ACTIVE'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    status: Mapped[ManualDraftStatus] = mapped_column(
+        Enum(ManualDraftStatus, native_enum=False, create_constraint=True, length=16),
+        default=ManualDraftStatus.ACTIVE,
+    )
+    distance_m: Mapped[int | None] = mapped_column(Integer)
+    elapsed_time_sec: Mapped[int | None] = mapped_column(Integer)
+    moving_time_sec: Mapped[int | None] = mapped_column(Integer)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    timezone: Mapped[str] = mapped_column(String(64))
+    avg_hr: Mapped[int | None] = mapped_column(Integer)
+    max_hr: Mapped[int | None] = mapped_column(Integer)
+    avg_cadence_spm: Mapped[int | None] = mapped_column(Integer)
+    elevation_gain_m: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String(255))
+    pending_field: Mapped[str | None] = mapped_column(String(32))
+    telegram_message_id: Mapped[int | None] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    activity_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("activities.id", ondelete="SET NULL")
+    )
 
 
 class ReportType(StrEnum):

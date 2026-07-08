@@ -3,7 +3,14 @@ import contextlib
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import BotCommand
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+)
 
 from app.bot.group_handlers import router as group_router
 from app.bot.handlers import router
@@ -15,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class BotRuntime:
     def __init__(self, token: str, services: AppServices, *, outbox_poll_seconds: int = 5) -> None:
-        self.bot = Bot(token=token)
+        self.bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         self.dispatcher = Dispatcher()
         self.dispatcher.include_router(router)
         self.dispatcher.include_router(group_router)
@@ -29,28 +36,42 @@ class BotRuntime:
         await self.bot.set_my_commands(
             [
                 BotCommand(command="start", description="Начать работу"),
+                BotCommand(command="menu", description="Главное меню"),
                 BotCommand(command="run", description="Добавить пробежку"),
                 BotCommand(command="stats", description="Статистика за все время"),
                 BotCommand(command="week", description="Текущая неделя"),
                 BotCommand(command="next", description="Следующая тренировка"),
                 BotCommand(command="plan", description="Черновик плана"),
-                BotCommand(command="month", description="Месяц группы"),
-                BotCommand(command="group_goal", description="Цель группы на месяц"),
                 BotCommand(command="external_processing", description="Внешний wording"),
                 BotCommand(command="pr", description="Личные результаты"),
                 BotCommand(command="privacy", description="Настройки приватности"),
                 BotCommand(command="share", description="Sharing для группы"),
-                BotCommand(command="setup_group", description="Настроить беговую группу"),
-                BotCommand(command="join", description="Вступить в беговую группу"),
-                BotCommand(command="leave", description="Покинуть беговую группу"),
-                BotCommand(command="leaderboard", description="Рейтинг группы"),
-                BotCommand(command="streaks", description="Серии по неделям"),
                 BotCommand(command="imports", description="История импортов"),
                 BotCommand(command="link", description="Связать Android Health Connect"),
                 BotCommand(command="devices", description="Связанные Android-устройства"),
                 BotCommand(command="revoke_device", description="Отозвать Android token"),
                 BotCommand(command="help", description="Помощь"),
-            ]
+            ],
+            scope=BotCommandScopeAllPrivateChats(),
+        )
+        await self.bot.set_my_commands(
+            [
+                BotCommand(command="week", description="Неделя группы"),
+                BotCommand(command="month", description="Месяц группы"),
+                BotCommand(command="join", description="Вступить в беговую группу"),
+                BotCommand(command="leave", description="Покинуть беговую группу"),
+                BotCommand(command="leaderboard", description="Рейтинг группы"),
+                BotCommand(command="streaks", description="Серии по неделям"),
+                BotCommand(command="help", description="Помощь"),
+            ],
+            scope=BotCommandScopeAllGroupChats(),
+        )
+        await self.bot.set_my_commands(
+            [
+                BotCommand(command="setup_group", description="Настроить беговую группу"),
+                BotCommand(command="group_goal", description="Цель группы на месяц"),
+            ],
+            scope=BotCommandScopeAllChatAdministrators(),
         )
         self.task = asyncio.create_task(
             self.dispatcher.start_polling(

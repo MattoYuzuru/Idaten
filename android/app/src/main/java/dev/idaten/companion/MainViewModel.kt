@@ -14,6 +14,8 @@ import dev.idaten.companion.model.HealthConnectMapper
 import dev.idaten.companion.model.PermissionState
 import dev.idaten.companion.model.RunItem
 import dev.idaten.companion.model.RunMappingResult
+import dev.idaten.companion.model.RunSearchSummary
+import dev.idaten.companion.model.RunSkipReason
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +29,7 @@ data class MainUiState(
     val healthState: HealthOnboardingState = HealthOnboardingState.CHECKING,
     val permissionState: PermissionState? = null,
     val runs: List<RunItem> = emptyList(),
+    val runSearchSummary: RunSearchSummary? = null,
     val loadingRuns: Boolean = false,
     val syncing: Boolean = false,
     val permissionRequestInFlight: Boolean = false,
@@ -194,14 +197,33 @@ class MainViewModel(
             }
             mutableState.value = state.value.copy(loadingRuns = true, healthMessage = null)
             runCatching { health.latestRuns() }
-                .onSuccess { runs ->
+                .onSuccess { search ->
+                    val runs = search.runs.map { RunItem(it, mapper.map(it)) }
+                    val ready = runs.count { it.mapping is RunMappingResult.Ready }
+                    val errors = runs.count { (it.mapping as? RunMappingResult.Invalid)?.reason == RunSkipReason.READ_ERROR }
                     mutableState.value =
                         state.value.copy(
                             loadingRuns = false,
-                            runs = runs.map { RunItem(it, mapper.map(it)) },
+                            runs = runs,
+                            runSearchSummary =
+                                RunSearchSummary(
+                                    searchedFrom = search.searchedFrom,
+                                    searchedUntil = search.searchedUntil,
+                                    found = runs.size,
+                                    ready = ready,
+                                    skipped = runs.size - ready - errors,
+                                    errors = errors,
+                                    nonRunning = search.nonRunningCount,
+                                    pagesRead = search.pagesRead,
+                                    olderRecordsExist = search.olderRecordsExist,
+                                ),
                             healthMessage =
                                 if (runs.isEmpty()) {
-                                    "Health Connect доступен, но пробежки не найдены. Старые данные могут быть ограничены системными настройками Health Connect."
+                                    if (search.olderRecordsExist) {
+                                        "В выбранном периоде пробежек нет, но Health Connect содержит более старые записи вне периода поиска."
+                                    } else {
+                                        "Health Connect не вернул пробежек. Если Samsung Health не передал запись, добавьте ее вручную или импортируйте GPX/TCX/FIT/CSV."
+                                    }
                                 } else {
                                     null
                                 },
@@ -243,23 +265,38 @@ class MainViewModel(
                 return@launch
             }
             mutableState.value = state.value.copy(syncing = true, backendMessage = null)
-            runCatching { devices.sync(SyncRequest(state.value.status?.lastSyncCursor, ready)) }
-                .onSuccess { response ->
-                    val results = response.items.associateBy { it.externalId }
-                    mutableState.value =
-                        state.value.copy(
-                            syncing = false,
-                            runs =
-                                state.value.runs.map { item ->
-                                    val result = results[item.raw.externalId]
-                                    item.copy(syncStatus = result?.status, syncMessage = result?.message)
-                                },
-                            backendMessage = "Синхронизация завершена",
-                        )
-                    refreshStatus()
-                }.onFailure { error ->
-                    mutableState.value = state.value.copy(syncing = false, backendMessage = safeMessage(error))
-                }
+            val batchId = devices.beginSyncBatch()
+            runCatching {
+                devices.sync(
+                    SyncRequest(
+                        cursor = state.value.status?.lastSyncCursor,
+                        batchId = batchId,
+                        foundCount = state.value.runSearchSummary?.found ?: ready.size,
+                        skippedCount = state.value.runSearchSummary?.skipped ?: 0,
+                        readErrorCount = state.value.runSearchSummary?.errors ?: 0,
+                        activities = ready,
+                    ),
+                )
+            }.onSuccess { response ->
+                devices.completeSyncBatch()
+                val results = response.items.associateBy { it.externalId }
+                mutableState.value =
+                    state.value.copy(
+                        syncing = false,
+                        runs =
+                            state.value.runs.map { item ->
+                                val result = results[item.raw.externalId]
+                                item.copy(syncStatus = result?.status, syncMessage = result?.message)
+                            },
+                        backendMessage =
+                            "Синхронизация: сохранено ${response.counts.saved}, " +
+                                "дубли ${response.counts.duplicate}, пропущено ${response.counts.skipped}, " +
+                                "ошибок ${response.counts.error}",
+                    )
+                refreshStatus()
+            }.onFailure { error ->
+                mutableState.value = state.value.copy(syncing = false, backendMessage = safeMessage(error))
+            }
         }
 
     private fun safeMessage(error: Throwable): String =

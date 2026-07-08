@@ -18,6 +18,48 @@ interface TokenStore {
     fun clear()
 }
 
+interface SyncBatchStore {
+    fun read(): String?
+
+    fun write(batchId: String)
+
+    fun clear()
+}
+
+class PreferencesSyncBatchStore(
+    context: Context,
+) : SyncBatchStore {
+    private val preferences = context.getSharedPreferences("sync_state", Context.MODE_PRIVATE)
+
+    override fun read(): String? = preferences.getString(BATCH_ID, null)
+
+    override fun write(batchId: String) {
+        preferences.edit().putString(BATCH_ID, batchId).apply()
+    }
+
+    override fun clear() {
+        preferences.edit().remove(BATCH_ID).apply()
+    }
+
+    private companion object {
+        const val BATCH_ID = "pending_batch_id"
+    }
+}
+
+class InMemorySyncBatchStore : SyncBatchStore {
+    private var batchId: String? = null
+
+    override fun read(): String? = batchId
+
+    override fun write(batchId: String) {
+        this.batchId = batchId
+    }
+
+    override fun clear() {
+        batchId = null
+    }
+}
+
 class AndroidKeystoreTokenStore(
     context: Context,
 ) : TokenStore {

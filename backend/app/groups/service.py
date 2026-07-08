@@ -1,6 +1,7 @@
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
+from html import escape
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -417,7 +418,7 @@ class GroupService:
         group: RunningGroup, user: User, activity: Activity, share_level: ShareLevel
     ) -> PublicationDraft:
         text = (
-            f"🏃 {user.display_name}\n"
+            f"🏃 {escape(user.display_name)}\n"
             f"{activity.distance_m / 1000:.2f} км · "
             f"{format_duration(activity.elapsed_time_sec)} · "
             f"{format_pace(activity.avg_pace_sec_per_km)}/км"

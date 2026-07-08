@@ -2,10 +2,10 @@
 
 Self-hosted Telegram-бот и backend для учета беговых тренировок, аналитики и рекомендаций.
 
-Реализован **MVP 0.6**: устанавливаемый Android companion с Health Connect onboarding,
-постоянно подписанный GitHub Release APK, immutable backend image в GHCR и production
-manifests для существующего k3s. Coach, imports и privacy/source policy предыдущих MVP
-сохранены; Activity из Health Connect по-прежнему создается `PRIVATE`.
+Реализован **MVP 0.7**: Android companion находит последние RUN через bounded Health
+Connect pagination, показывает диагностируемый foreground sync и отправляет один batch
+summary. Telegram получил state-aware onboarding, `/menu`, persistent кнопочный `/run`,
+полную `/help` и безопасный HTML presentation. Activity по-прежнему создается `PRIVATE`.
 
 ## Документация
 
@@ -13,7 +13,7 @@ manifests для существующего k3s. Coach, imports и privacy/sourc
 - [Roadmap](docs/roadmap.md)
 - [Инструкция для следующего агента](docs/agent-handoff.md)
 - [Журнал решений](docs/decision-log.md)
-- [Спецификация MVP 0.6](docs/iterations/mvp-0.6.md)
+- [Спецификация MVP 0.7](docs/iterations/mvp-0.7.md)
 - [Спецификации следующих MVP](docs/iterations/)
 - [Локальный запуск](docs/deployment.md)
 
@@ -32,7 +32,7 @@ curl http://localhost:8000/health
 curl http://localhost:8000/ready
 ```
 
-Личные команды: `/start`, `/run 10.02 1:02:41`, `/stats`, `/week`, `/next`,
+Личные команды: `/start`, `/menu`, `/run`, `/run 10.02 1:02:41`, `/stats`, `/week`, `/next`,
 `/plan <FIRST_10K|HALF|MARATHON|CUSTOM> [цель]`, `/external_processing on|off`, `/pr`,
 `/privacy [on|off]`, `/share <chat_id> <none|summary|detailed>`, `/link`, `/devices`,
 `/revoke_device <device_uuid>`, `/help`.

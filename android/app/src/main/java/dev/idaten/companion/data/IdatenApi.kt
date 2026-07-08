@@ -31,6 +31,10 @@ data class LinkCompleteResponse(
 @Serializable
 data class SyncRequest(
     val cursor: String? = null,
+    @SerialName("batch_id") val batchId: String? = null,
+    @SerialName("found_count") val foundCount: Int = 0,
+    @SerialName("skipped_count") val skippedCount: Int = 0,
+    @SerialName("read_error_count") val readErrorCount: Int = 0,
     val activities: List<SyncActivityDto>,
 )
 
@@ -47,6 +51,15 @@ data class SyncItemResponse(
 data class SyncResponse(
     val cursor: String? = null,
     val items: List<SyncItemResponse>,
+    val counts: SyncCounts = SyncCounts(),
+)
+
+@Serializable
+data class SyncCounts(
+    val saved: Int = 0,
+    val duplicate: Int = 0,
+    val skipped: Int = 0,
+    val error: Int = 0,
 )
 
 @Serializable

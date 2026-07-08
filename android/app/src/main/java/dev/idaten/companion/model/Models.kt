@@ -24,6 +24,23 @@ data class RawHealthRun(
     val heartRates: List<Int> = emptyList(),
     val samples: List<HealthSample> = emptyList(),
     val routeConsentRecordId: String? = null,
+    val readIssue: RunSkipReason? = null,
+)
+
+enum class RunSkipReason {
+    MISSING_DISTANCE,
+    INVALID_DURATION,
+    READ_ERROR,
+}
+
+data class HealthRunSearchResult(
+    val runs: List<RawHealthRun>,
+    val searchedFrom: String,
+    val searchedUntil: String,
+    val pagesRead: Int,
+    val nonRunningCount: Int,
+    val exhausted: Boolean,
+    val olderRecordsExist: Boolean,
 )
 
 @Serializable
@@ -57,18 +74,19 @@ sealed interface RunMappingResult {
 
     data class Invalid(
         val externalId: String,
-        val reason: String,
+        val reason: RunSkipReason,
     ) : RunMappingResult
 }
 
 class HealthConnectMapper {
     fun map(run: RawHealthRun): RunMappingResult {
+        run.readIssue?.let { return RunMappingResult.Invalid(run.externalId, it) }
         val distance = run.distanceMeters
         if (distance == null || distance <= 0 || distance > Int.MAX_VALUE) {
-            return RunMappingResult.Invalid(run.externalId, "Distance is unavailable")
+            return RunMappingResult.Invalid(run.externalId, RunSkipReason.MISSING_DISTANCE)
         }
         if (run.elapsedSeconds <= 0 || run.elapsedSeconds > Int.MAX_VALUE) {
-            return RunMappingResult.Invalid(run.externalId, "Duration is invalid")
+            return RunMappingResult.Invalid(run.externalId, RunSkipReason.INVALID_DURATION)
         }
         return RunMappingResult.Ready(
             SyncActivityDto(
@@ -127,4 +145,16 @@ data class RunItem(
     val mapping: RunMappingResult,
     val syncStatus: String? = null,
     val syncMessage: String? = null,
+)
+
+data class RunSearchSummary(
+    val searchedFrom: String,
+    val searchedUntil: String,
+    val found: Int,
+    val ready: Int,
+    val skipped: Int,
+    val errors: Int,
+    val nonRunning: Int,
+    val pagesRead: Int,
+    val olderRecordsExist: Boolean,
 )

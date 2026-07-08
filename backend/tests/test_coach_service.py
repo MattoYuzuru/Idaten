@@ -144,7 +144,7 @@ async def test_template_fallback_without_api_key(
     result = await services.coach.next_workout(42, NOW)
 
     assert result.provider == "NONE"
-    assert result.message.startswith("Следующая тренировка")
+    assert result.message.startswith("<b>Следующая тренировка</b>")
 
 
 @pytest.mark.asyncio
@@ -222,7 +222,7 @@ async def test_provider_timeout_error_retry_and_fallback(
 
     assert provider.calls == 2
     assert result.provider == "NONE"
-    assert result.message.startswith("Следующая тренировка")
+    assert result.message.startswith("<b>Следующая тренировка</b>")
     async with session_factory() as session:
         assert await session.get(CoachReport, result.report_id) is not None
 

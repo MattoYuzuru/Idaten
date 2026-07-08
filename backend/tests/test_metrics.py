@@ -6,6 +6,7 @@ from app.analytics.metrics import (
     MetricsError,
     calculate_pace_sec_per_km,
     format_duration,
+    format_local_week_period,
     format_pace,
     local_week_bounds,
 )
@@ -26,3 +27,14 @@ def test_week_bounds_use_user_timezone() -> None:
     start, end = local_week_bounds(datetime(2026, 7, 8, 12, tzinfo=UTC), "Europe/Moscow")
     assert start == datetime(2026, 7, 5, 21, tzinfo=UTC)
     assert end == datetime(2026, 7, 12, 21, tzinfo=UTC)
+
+
+def test_week_period_uses_local_calendar_dates() -> None:
+    assert (
+        format_local_week_period(
+            datetime(2026, 6, 14, 21, tzinfo=UTC),
+            datetime(2026, 6, 21, 21, tzinfo=UTC),
+            "Europe/Moscow",
+        )
+        == "15–21 июня"
+    )

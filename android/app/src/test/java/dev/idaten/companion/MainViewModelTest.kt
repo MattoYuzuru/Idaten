@@ -7,12 +7,14 @@ import dev.idaten.companion.data.IdatenApi
 import dev.idaten.companion.data.InMemoryTokenStore
 import dev.idaten.companion.data.LinkCompleteRequest
 import dev.idaten.companion.data.LinkCompleteResponse
+import dev.idaten.companion.data.SyncCounts
 import dev.idaten.companion.data.SyncItemResponse
 import dev.idaten.companion.data.SyncRequest
 import dev.idaten.companion.data.SyncResponse
 import dev.idaten.companion.health.HealthConnectSource
 import dev.idaten.companion.health.HealthOnboardingState
 import dev.idaten.companion.model.HealthAvailability
+import dev.idaten.companion.model.HealthRunSearchResult
 import dev.idaten.companion.model.PermissionState
 import dev.idaten.companion.model.RawHealthRun
 import kotlinx.coroutines.test.runTest
@@ -212,16 +214,25 @@ class MainViewModelTest {
             )
         }
 
-        override suspend fun latestRuns(limit: Int): List<RawHealthRun> {
+        override suspend fun latestRuns(limit: Int): HealthRunSearchResult {
             readCalls += 1
-            return listOf(
-                RawHealthRun(
-                    externalId = "hc-1",
-                    startedAt = "2026-07-06T06:00:00Z",
-                    timezone = "Europe/Moscow",
-                    distanceMeters = 5_000,
-                    elapsedSeconds = 1_800,
-                ),
+            return HealthRunSearchResult(
+                runs =
+                    listOf(
+                        RawHealthRun(
+                            externalId = "hc-1",
+                            startedAt = "2026-07-06T06:00:00Z",
+                            timezone = "Europe/Moscow",
+                            distanceMeters = 5_000,
+                            elapsedSeconds = 1_800,
+                        ),
+                    ),
+                searchedFrom = "2026-01-07T00:00:00Z",
+                searchedUntil = "2026-07-06T00:00:00Z",
+                pagesRead = 2,
+                nonRunningCount = 3,
+                exhausted = true,
+                olderRecordsExist = false,
             )
         }
 
@@ -264,6 +275,7 @@ class MainViewModelTest {
             return SyncResponse(
                 cursor,
                 listOf(SyncItemResponse("hc-1", "saved", activityId = "activity")),
+                SyncCounts(saved = 1),
             )
         }
     }
