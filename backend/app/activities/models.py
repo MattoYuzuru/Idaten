@@ -145,8 +145,20 @@ class ManualActivityDraft(TimestampMixin, Base):
         ),
         CheckConstraint(
             "moving_time_sec IS NULL OR elapsed_time_sec IS NULL OR "
-            "moving_time_sec <= elapsed_time_sec",
+            "(moving_time_sec > 0 AND moving_time_sec <= elapsed_time_sec)",
             name="moving_not_greater_than_elapsed",
+        ),
+        CheckConstraint(
+            "avg_hr IS NULL OR (avg_hr >= 20 AND avg_hr <= 260)",
+            name="avg_hr_range",
+        ),
+        CheckConstraint(
+            "max_hr IS NULL OR (max_hr >= 20 AND max_hr <= 260)",
+            name="max_hr_range",
+        ),
+        CheckConstraint(
+            "avg_hr IS NULL OR max_hr IS NULL OR avg_hr <= max_hr",
+            name="avg_hr_not_greater_than_max",
         ),
         CheckConstraint(
             "avg_cadence_spm IS NULL OR (avg_cadence_spm >= 30 AND avg_cadence_spm <= 300)",

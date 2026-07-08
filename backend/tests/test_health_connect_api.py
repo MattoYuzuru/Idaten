@@ -83,6 +83,8 @@ def test_link_sync_status_and_safe_item_error(tmp_path: Path) -> None:
             json={
                 "cursor": "cursor-1",
                 "batch_id": "api-delivery-1",
+                "found_count": 3,
+                "skipped_count": 1,
                 "activities": [
                     {
                         "external_id": "api-valid",
@@ -111,7 +113,7 @@ def test_link_sync_status_and_safe_item_error(tmp_path: Path) -> None:
         assert sync.json()["counts"] == {
             "saved": 1,
             "duplicate": 0,
-            "skipped": 0,
+            "skipped": 1,
             "error": 1,
         }
         assert "traceback" not in sync.text.lower()

@@ -637,12 +637,13 @@ async def manual_draft_callback(callback: CallbackQuery, services: AppServices) 
         elif action == "save":
             result = await services.activities.confirm_manual_draft(callback.from_user.id, draft_id)
             await callback.message.edit_text("✅ Пробежка сохранена private.")
-            await _send_run_result(
-                callback.message,
-                services,
-                result,
-                telegram_user_id=callback.from_user.id,
-            )
+            if result.created:
+                await _send_run_result(
+                    callback.message,
+                    services,
+                    result,
+                    telegram_user_id=callback.from_user.id,
+                )
         elif action == "field" and field_parts:
             field = field_parts[0]
             draft = await services.activities.choose_manual_draft_field(

@@ -7,6 +7,7 @@ import dev.idaten.companion.data.IdatenApi
 import dev.idaten.companion.data.InMemoryTokenStore
 import dev.idaten.companion.data.LinkCompleteRequest
 import dev.idaten.companion.data.LinkCompleteResponse
+import dev.idaten.companion.data.SyncCounts
 import dev.idaten.companion.data.SyncItemResponse
 import dev.idaten.companion.data.SyncRequest
 import dev.idaten.companion.data.SyncResponse
@@ -274,6 +275,7 @@ class MainViewModelTest {
             return SyncResponse(
                 cursor,
                 listOf(SyncItemResponse("hc-1", "saved", activityId = "activity")),
+                SyncCounts(saved = 1),
             )
         }
     }

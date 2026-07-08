@@ -86,6 +86,13 @@ class Device(TimestampMixin, Base):
 
 class HealthConnectSyncBatch(Base):
     __tablename__ = "health_connect_sync_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "found_count >= 0 AND saved_count >= 0 AND duplicate_count >= 0 "
+            "AND skipped_count >= 0 AND error_count >= 0",
+            name="counts_nonnegative",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))

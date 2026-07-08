@@ -32,6 +32,9 @@ data class LinkCompleteResponse(
 data class SyncRequest(
     val cursor: String? = null,
     @SerialName("batch_id") val batchId: String? = null,
+    @SerialName("found_count") val foundCount: Int = 0,
+    @SerialName("skipped_count") val skippedCount: Int = 0,
+    @SerialName("read_error_count") val readErrorCount: Int = 0,
     val activities: List<SyncActivityDto>,
 )
 

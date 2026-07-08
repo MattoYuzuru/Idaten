@@ -270,31 +270,43 @@ class HealthConnectService:
         cursor: str | None,
         *,
         batch_id: str | None = None,
+        found_count: int = 0,
+        skipped_count: int = 0,
+        read_error_count: int = 0,
     ) -> SyncBatchResult:
         if not runs:
             raise HealthConnectError("Batch не должен быть пустым.", code="EMPTY_BATCH")
         if len(runs) > self.max_batch_size:
             raise HealthConnectError("Batch превышает допустимый размер.", code="BATCH_TOO_LARGE")
+        minimum_found = len(runs) + skipped_count + read_error_count
+        if found_count and found_count < minimum_found:
+            raise HealthConnectError(
+                "Диагностика batch противоречива.", code="INVALID_BATCH_DIAGNOSTICS"
+            )
         async with self.session_factory() as session:
             authorized_device = await self._authorize(session, token)
             device_id = authorized_device.id
             user_id = authorized_device.user_id
 
         ordered_runs = tuple(sorted(runs, key=lambda item: (item.started_at, item.external_id)))
-        is_batch = len(ordered_runs) > 1
+        is_batch = len(ordered_runs) > 1 or skipped_count > 0 or read_error_count > 0
         results: list[SyncItemResult] = []
         for run in ordered_runs:
             results.append(await self._sync_item(user_id, run, create_outbox=not is_batch))
 
         errors = [item for item in results if item.state == SyncItemState.ERROR]
+        total_error_count = len(errors) + read_error_count
+        successful_item_count = sum(
+            item.state in {SyncItemState.SAVED, SyncItemState.DUPLICATE} for item in results
+        )
         sync_status = (
             SyncStatus.SUCCESS
-            if not errors
+            if total_error_count == 0
             else SyncStatus.FAILED
-            if len(errors) == len(results)
+            if successful_item_count == 0
             else SyncStatus.PARTIAL
         )
-        stored_cursor = cursor if not errors else None
+        stored_cursor = cursor if total_error_count == 0 else None
         async with self.session_factory.begin() as session:
             stored_device = await HealthConnectRepository(session).device(
                 device_id, for_update=True
@@ -303,7 +315,13 @@ class HealthConnectService:
                 raise HealthConnectError("Device token отозван.", code="TOKEN_REVOKED")
             stored_device.last_sync_at = datetime.now(UTC)
             stored_device.last_sync_status = sync_status
-            stored_device.last_sync_error = errors[0].error_code if errors else None
+            stored_device.last_sync_error = (
+                errors[0].error_code
+                if errors
+                else "SOURCE_READ_ERROR"
+                if read_error_count
+                else None
+            )
             if stored_cursor is not None:
                 stored_device.last_sync_cursor = stored_cursor[:255]
             result_cursor = stored_device.last_sync_cursor
@@ -317,9 +335,17 @@ class HealthConnectService:
                 runs=ordered_runs,
                 results=tuple(results),
                 client_batch_id=batch_id,
+                found_count=found_count or minimum_found,
+                skipped_count=skipped_count,
+                read_error_count=read_error_count,
             )
         return SyncBatchResult(
-            tuple(results), result_cursor, saved_count, duplicate_count, 0, error_count
+            tuple(results),
+            result_cursor,
+            saved_count,
+            duplicate_count,
+            skipped_count,
+            error_count + read_error_count,
         )
 
     async def _sync_item(
@@ -505,6 +531,9 @@ class HealthConnectService:
         runs: tuple[HealthConnectRun, ...],
         results: tuple[SyncItemResult, ...],
         client_batch_id: str | None,
+        found_count: int,
+        skipped_count: int,
+        read_error_count: int,
     ) -> None:
         identity = client_batch_id or "\n".join(sorted(run.external_id for run in runs))
         batch_key = hashlib.sha256(f"{device_id}\n{identity}".encode()).hexdigest()
@@ -530,17 +559,17 @@ class HealthConnectService:
                 )
             saved = sum(item.state == SyncItemState.SAVED for item in results)
             duplicate = sum(item.state == SyncItemState.DUPLICATE for item in results)
-            errors = sum(item.state == SyncItemState.ERROR for item in results)
+            errors = sum(item.state == SyncItemState.ERROR for item in results) + read_error_count
             batch = HealthConnectSyncBatch(
                 device_id=device_id,
                 user_id=user_id,
                 batch_key=batch_key,
                 period_start=min(run.started_at for run in runs),
                 period_end=max(run.started_at for run in runs),
-                found_count=len(runs),
+                found_count=found_count,
                 saved_count=saved,
                 duplicate_count=duplicate,
-                skipped_count=0,
+                skipped_count=skipped_count,
                 error_count=errors,
                 created_at=now,
             )
@@ -556,10 +585,10 @@ class HealthConnectService:
                         timezone=user.timezone,
                         period_start=batch.period_start,
                         period_end=batch.period_end,
-                        found=len(runs),
+                        found=found_count,
                         saved=saved,
                         duplicate=duplicate,
-                        skipped=0,
+                        skipped=skipped_count,
                         errors=errors,
                     ),
                     available_at=now,

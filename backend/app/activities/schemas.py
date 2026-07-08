@@ -52,6 +52,7 @@ class RecordedRun:
     activity: ActivitySummary
     week_stats: AggregateStats
     report_message: str
+    created: bool = True
 
 
 @dataclass(frozen=True, slots=True)

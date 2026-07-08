@@ -271,6 +271,9 @@ class MainViewModel(
                     SyncRequest(
                         cursor = state.value.status?.lastSyncCursor,
                         batchId = batchId,
+                        foundCount = state.value.runSearchSummary?.found ?: ready.size,
+                        skippedCount = state.value.runSearchSummary?.skipped ?: 0,
+                        readErrorCount = state.value.runSearchSummary?.errors ?: 0,
                         activities = ready,
                     ),
                 )

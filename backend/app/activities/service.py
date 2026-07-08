@@ -78,6 +78,7 @@ class ActivityService:
             active = await repository.active_manual_draft(user.id)
             if active is not None and self._as_utc(active.expires_at) <= moment:
                 active.status = ManualDraftStatus.EXPIRED
+                await session.flush()
                 active = None
             if active is None:
                 active = ManualActivityDraft(
@@ -292,7 +293,7 @@ class ActivityService:
             activity.elapsed_time_sec,
             activity.avg_pace_sec_per_km,
         )
-        return RecordedRun(summary, AggregateStats(), report.message_private)
+        return RecordedRun(summary, AggregateStats(), report.message_private, created=False)
 
     @staticmethod
     def _require_active_draft(

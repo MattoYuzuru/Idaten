@@ -72,8 +72,20 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "moving_time_sec IS NULL OR elapsed_time_sec IS NULL OR "
-            "moving_time_sec <= elapsed_time_sec",
+            "(moving_time_sec > 0 AND moving_time_sec <= elapsed_time_sec)",
             name="ck_manual_activity_drafts_moving_not_greater_than_elapsed",
+        ),
+        sa.CheckConstraint(
+            "avg_hr IS NULL OR (avg_hr >= 20 AND avg_hr <= 260)",
+            name="ck_manual_activity_drafts_avg_hr_range",
+        ),
+        sa.CheckConstraint(
+            "max_hr IS NULL OR (max_hr >= 20 AND max_hr <= 260)",
+            name="ck_manual_activity_drafts_max_hr_range",
+        ),
+        sa.CheckConstraint(
+            "avg_hr IS NULL OR max_hr IS NULL OR avg_hr <= max_hr",
+            name="ck_manual_activity_drafts_avg_hr_not_greater_than_max",
         ),
         sa.CheckConstraint(
             "avg_cadence_spm IS NULL OR (avg_cadence_spm >= 30 AND avg_cadence_spm <= 300)",
@@ -123,6 +135,11 @@ def upgrade() -> None:
         sa.Column("skipped_count", sa.Integer(), nullable=False),
         sa.Column("error_count", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            "found_count >= 0 AND saved_count >= 0 AND duplicate_count >= 0 "
+            "AND skipped_count >= 0 AND error_count >= 0",
+            name="ck_health_connect_sync_batches_counts_nonnegative",
+        ),
         sa.ForeignKeyConstraint(
             ["device_id"],
             ["devices.id"],

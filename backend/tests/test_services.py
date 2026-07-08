@@ -116,6 +116,8 @@ async def test_persistent_manual_draft_confirm_is_idempotent(
     repeated = await services.activities.confirm_manual_draft(42, draft.draft_id)
 
     assert repeated.activity.activity_id == first.activity.activity_id
+    assert first.created is True
+    assert repeated.created is False
     async with session_factory() as session:
         activities = (await session.execute(select(Activity))).scalars().all()
         assert len(activities) == 1

@@ -33,12 +33,13 @@ def build_batch_summary(
             f"{format_duration(sum(item.elapsed_time_sec for item in activities))}"
         )
         local_groups: dict[str, list[Activity]] = {}
-        for activity in sorted(
+        latest = sorted(
             activities, key=lambda item: (item.started_at, item.external_id or ""), reverse=True
-        ):
+        )[:maximum_items]
+        for activity in latest:
             key = activity.started_at.astimezone(zone).strftime("%d.%m.%Y")
             local_groups.setdefault(key, []).append(activity)
-        for local_date, group in list(local_groups.items())[:maximum_items]:
+        for local_date, group in local_groups.items():
             lines.append(
                 f"\n📅 <b>{local_date}</b> · {len(group)} сесс. · "
                 f"{sum(item.distance_m for item in group) / 1000:.2f} км · "

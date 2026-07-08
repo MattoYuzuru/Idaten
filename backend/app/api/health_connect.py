@@ -73,6 +73,9 @@ class SyncRequest(BaseModel):
 
     cursor: str | None = Field(default=None, max_length=255)
     batch_id: str | None = Field(default=None, min_length=1, max_length=64)
+    found_count: int = Field(default=0, ge=0, le=100)
+    skipped_count: int = Field(default=0, ge=0, le=100)
+    read_error_count: int = Field(default=0, ge=0, le=100)
     activities: tuple[RunRequest, ...]
 
 
@@ -121,7 +124,13 @@ async def sync_activities(
     runs = tuple(_run_from_request(run) for run in body.activities)
     try:
         result = await services.health_connect.sync(
-            token, runs, body.cursor, batch_id=body.batch_id
+            token,
+            runs,
+            body.cursor,
+            batch_id=body.batch_id,
+            found_count=body.found_count,
+            skipped_count=body.skipped_count,
+            read_error_count=body.read_error_count,
         )
     except HealthConnectError as error:
         raise _http_error(error) from error
