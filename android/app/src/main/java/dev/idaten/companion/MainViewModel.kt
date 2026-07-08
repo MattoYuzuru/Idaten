@@ -42,7 +42,7 @@ class MainViewModel(
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(MainUiState(linked = devices.isLinked()))
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
-    private var healthRefreshInFlight = false
+    private var healthRefreshGeneration = 0
 
     init {
         refreshHealth()
@@ -77,19 +77,27 @@ class MainViewModel(
         }
 
     fun refreshHealth() =
-        viewModelScope.launch {
-            if (healthRefreshInFlight) return@launch
-            healthRefreshInFlight = true
-            mutableState.value = state.value.copy(healthState = HealthOnboardingState.CHECKING, healthMessage = null)
-            val result = runCatching { health.permissionState() }
-            mutableState.value =
-                state.value.copy(
-                    permissionState = result.getOrNull(),
-                    healthState = result.getOrNull()?.onboardingState ?: HealthOnboardingState.UNSUPPORTED,
-                    healthMessage = result.exceptionOrNull()?.let { "Не удалось проверить Health Connect" },
-                )
-            healthRefreshInFlight = false
-        }
+        refreshHealthState(
+            failureMessage = "Не удалось проверить Health Connect",
+        )
+
+    private fun refreshHealthState(
+        checkingMessage: String? = null,
+        successMessage: (PermissionState) -> String? = { null },
+        failureMessage: String,
+    ) = viewModelScope.launch {
+        val generation = ++healthRefreshGeneration
+        mutableState.value = state.value.copy(healthState = HealthOnboardingState.CHECKING, healthMessage = checkingMessage)
+        val result = runCatching { health.permissionState() }
+        if (generation != healthRefreshGeneration) return@launch
+        val permissionState = result.getOrNull()
+        mutableState.value =
+            state.value.copy(
+                permissionState = permissionState,
+                healthState = permissionState?.onboardingState ?: HealthOnboardingState.UNSUPPORTED,
+                healthMessage = permissionState?.let(successMessage) ?: result.exceptionOrNull()?.let { failureMessage },
+            )
+    }
 
     fun requestBasePermissions(): Set<String>? {
         val current = state.value
@@ -105,20 +113,26 @@ class MainViewModel(
     }
 
     fun onPermissionResult(granted: Set<String>) {
-        val previous = state.value.permissionState ?: return
+        val previous =
+            state.value.permissionState
+                ?: run {
+                    mutableState.value = state.value.copy(permissionRequestInFlight = false)
+                    refreshHealth()
+                    return
+                }
         val permissionState = previous.copy(granted = granted)
         mutableState.value =
             state.value.copy(
                 permissionRequestInFlight = false,
                 permissionState = permissionState,
                 healthState = permissionState.onboardingState,
-                healthMessage =
-                    if (permissionState.baseGranted) {
-                        "Доступ к данным Health Connect предоставлен"
-                    } else {
-                        "Выданы не все разрешения. Их можно запросить повторно вручную."
-                    },
+                healthMessage = "Перепроверяем фактические разрешения Health Connect…",
             )
+        refreshHealthState(
+            checkingMessage = "Перепроверяем фактические разрешения Health Connect…",
+            successMessage = ::permissionResultMessage,
+            failureMessage = "Не удалось перепроверить разрешения Health Connect",
+        )
     }
 
     fun startProviderAction(): Boolean {
@@ -146,11 +160,24 @@ class MainViewModel(
         refreshHealth()
     }
 
-    fun refreshStatus() =
+    fun refreshStatus() = refreshBackendStatus(showSuccess = false)
+
+    fun refreshBackendAndHealth() {
+        refreshHealth()
+        refreshBackendStatus(showSuccess = true)
+    }
+
+    private fun refreshBackendStatus(showSuccess: Boolean) =
         viewModelScope.launch {
             runCatching { devices.status() }
-                .onSuccess { mutableState.value = state.value.copy(linked = true, status = it) }
-                .onFailure { error ->
+                .onSuccess {
+                    mutableState.value =
+                        state.value.copy(
+                            linked = true,
+                            status = it,
+                            backendMessage = if (showSuccess) "Backend доступен" else state.value.backendMessage,
+                        )
+                }.onFailure { error ->
                     if (error is ApiException && error.code in setOf("INVALID_TOKEN", "TOKEN_REVOKED")) {
                         devices.unlinkLocal()
                         mutableState.value = state.value.copy(linked = false, status = null)
@@ -172,6 +199,12 @@ class MainViewModel(
                         state.value.copy(
                             loadingRuns = false,
                             runs = runs.map { RunItem(it, mapper.map(it)) },
+                            healthMessage =
+                                if (runs.isEmpty()) {
+                                    "Health Connect доступен, но пробежки не найдены. Старые данные могут быть ограничены системными настройками Health Connect."
+                                } else {
+                                    null
+                                },
                         )
                 }.onFailure { error ->
                     mutableState.value =
@@ -233,6 +266,13 @@ class MainViewModel(
         when (error) {
             is ApiException -> error.message ?: error.code
             else -> "Ошибка сети или backend"
+        }
+
+    private fun permissionResultMessage(permissionState: PermissionState): String =
+        if (permissionState.baseGranted) {
+            "Доступ к данным Health Connect предоставлен"
+        } else {
+            "Idaten видит не все базовые разрешения Health Connect. Проверьте список ниже и запросите доступ повторно."
         }
 
     class Factory(
