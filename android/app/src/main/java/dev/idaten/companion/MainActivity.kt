@@ -229,7 +229,8 @@ private fun statusScreen(
                 "Health Connect недоступен. Нужен Android 9 или новее с Google Play Services; рабочие профили не поддерживаются.",
             )
         HealthOnboardingState.PERMISSIONS_REQUIRED -> {
-            Text("Нужен доступ только на чтение: тренировки, дистанция, пульс, скорость, каденс и набор высоты.")
+            Text("Нужен доступ только на чтение: тренировки, дистанция, пульс, скорость и набор высоты.")
+            Text("Каденс используется только если Health Connect уже выдал этот optional-доступ.")
             Text("Маршрут не входит в этот запрос и подтверждается отдельно для каждой пробежки.")
             state.permissionState?.let { permissions ->
                 Text(
