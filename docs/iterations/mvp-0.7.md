@@ -372,18 +372,36 @@ JSON draft допустим только для действительно optio
 
 ## Checklist
 
-- [ ] ADR для session grouping, drafts и batch outbox добавлена.
-- [ ] Health Connect pagination/filter/order и diagnostics исправлены.
-- [ ] Daily grouping и chronological reports реализованы.
-- [ ] Initial sync batch summary идемпотентен.
-- [ ] Extended `/run` и schema migration реализованы.
-- [ ] Persistent button wizard использует тот же manual use case.
-- [ ] `/start`, `/menu`, post-link onboarding и next actions реализованы.
-- [ ] HTML presentation, pagination и privacy-safe formatting применены.
-- [ ] Полный `/help` и scoped command menus синхронизированы.
+- [x] ADR для session grouping, drafts и batch outbox добавлена.
+- [x] Health Connect pagination/filter/order и diagnostics исправлены.
+- [x] Daily grouping и chronological reports реализованы.
+- [x] Initial sync batch summary идемпотентен.
+- [x] Extended `/run` и schema migration реализованы.
+- [x] Persistent button wizard использует тот же manual use case.
+- [x] `/start`, `/menu`, post-link onboarding и next actions реализованы.
+- [x] HTML presentation, pagination и privacy-safe formatting применены.
+- [x] Полный `/help` и scoped command menus синхронизированы.
 - [ ] Backend/Android/PostgreSQL/Docker gates пройдены.
 - [ ] Physical-device и Telegram UX acceptance пройдены.
 - [ ] README/deployment/handoff обновлены, draft PR опубликован.
+
+## Результат pre-production gate
+
+- Backend: Ruff format/check, strict mypy и 94 pytest прошли.
+- Android: 23 unit tests, Spotless, debug assembly и lint прошли. Signed release assembly
+  выполняется GitHub CI, поскольку локальные release-signing credentials не экспортированы.
+- PostgreSQL 17: clean upgrade, upgrade `0005 -> 0006`, schema check, downgrade
+  `0006 -> 0005`, повторный upgrade и check прошли на disposable container.
+- Docker Compose: image build, migrations, `/health` и `/ready` прошли; volumes и
+  containers удалены после smoke.
+- Deployment: provisioning unit tests, shellcheck и kustomize assertions прошли.
+- Bot API 10.1 spike: aiogram 3.29.1 содержит `sendRichMessage`, но целевые Telegram
+  клиенты не подтверждены; выбран обязательный HTML fallback без streaming rich drafts.
+
+Open release blocker: `adb devices -l` не показал подключенного физического устройства,
+поэтому mixed-history/route/upgrade checklist и live Telegram UX еще не выполнены. До
+этой проверки нельзя отмечать acceptance criterion 13, создавать `v0.7.0` и выполнять
+production rollout.
 
 ## Known limitations после MVP 0.7
 
