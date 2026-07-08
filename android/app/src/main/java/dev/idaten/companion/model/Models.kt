@@ -109,6 +109,8 @@ data class PermissionState(
     val required: Set<String>,
     val routeGranted: Boolean,
 ) {
+    val grantedBasePermissions: Set<String> = required.intersect(granted)
+    val missingBasePermissions: Set<String> = required - granted
     val baseGranted: Boolean = healthConnect == HealthAvailability.AVAILABLE && granted.containsAll(required)
     val canReadRoute: Boolean = baseGranted && routeGranted
     val onboardingState: HealthOnboardingState =

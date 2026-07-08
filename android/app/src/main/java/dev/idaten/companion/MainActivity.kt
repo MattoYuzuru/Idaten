@@ -34,7 +34,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.contracts.ExerciseRouteRequestContract
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.DistanceRecord
+import androidx.health.connect.client.records.ElevationGainedRecord
 import androidx.health.connect.client.records.ExerciseRoute
+import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.SpeedRecord
+import androidx.health.connect.client.records.StepsCadenceRecord
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.idaten.companion.data.AndroidKeystoreTokenStore
 import dev.idaten.companion.data.DeviceRepository
@@ -141,7 +148,7 @@ fun idatenApp(
                         state,
                         requestPermissions,
                         openProvider,
-                        viewModel::refreshStatus,
+                        viewModel::refreshBackendAndHealth,
                     )
                 Screen.RUNS ->
                     runsScreen(
@@ -224,6 +231,15 @@ private fun statusScreen(
         HealthOnboardingState.PERMISSIONS_REQUIRED -> {
             Text("Нужен доступ только на чтение: тренировки, дистанция, пульс, скорость, каденс и набор высоты.")
             Text("Маршрут не входит в этот запрос и подтверждается отдельно для каждой пробежки.")
+            state.permissionState?.let { permissions ->
+                Text(
+                    "Idaten видит базовые разрешения: " +
+                        "${permissions.grantedBasePermissions.size}/${permissions.required.size}",
+                )
+                if (permissions.missingBasePermissions.isNotEmpty()) {
+                    Text("Не хватает: ${permissions.missingBasePermissions.joinToString { healthPermissionLabel(it) }}")
+                }
+            }
             Button(
                 onClick = requestPermissions,
                 enabled = !state.permissionRequestInFlight,
@@ -236,11 +252,22 @@ private fun statusScreen(
     }
     Button(
         onClick = refresh,
-        modifier = Modifier.semantics { contentDescription = "Обновить статус backend" },
+        modifier = Modifier.semantics { contentDescription = "Обновить статус backend и Health Connect" },
     ) {
-        Text("Проверить backend")
+        Text("Проверить backend и Health Connect")
     }
 }
+
+private fun healthPermissionLabel(permission: String): String =
+    when (permission) {
+        HealthPermission.getReadPermission(ExerciseSessionRecord::class) -> "тренировки"
+        HealthPermission.getReadPermission(DistanceRecord::class) -> "дистанция"
+        HealthPermission.getReadPermission(HeartRateRecord::class) -> "пульс"
+        HealthPermission.getReadPermission(SpeedRecord::class) -> "скорость"
+        HealthPermission.getReadPermission(StepsCadenceRecord::class) -> "каденс"
+        HealthPermission.getReadPermission(ElevationGainedRecord::class) -> "набор высоты"
+        else -> permission.substringAfterLast('.')
+    }
 
 @Composable
 private fun runsScreen(

@@ -107,14 +107,55 @@ class MainViewModelTest {
             assertEquals(health.basePermissions, viewModel.requestBasePermissions())
             assertFalse(health.basePermissions.contains(health.routePermission))
             assertEquals(null, viewModel.requestBasePermissions())
+            health.granted = setOf("exercise")
             viewModel.onPermissionResult(setOf("exercise"))
+            assertEquals(2, health.permissionChecks)
             assertEquals(HealthOnboardingState.PERMISSIONS_REQUIRED, viewModel.state.value.healthState)
             assertEquals(health.basePermissions, viewModel.requestBasePermissions())
+            health.granted = emptySet()
             viewModel.onPermissionResult(emptySet())
             assertEquals(HealthOnboardingState.PERMISSIONS_REQUIRED, viewModel.state.value.healthState)
             assertEquals(health.basePermissions, viewModel.requestBasePermissions())
+            health.granted = health.basePermissions
             viewModel.onPermissionResult(health.basePermissions)
             assertEquals(HealthOnboardingState.READY, viewModel.state.value.healthState)
+        }
+
+    @Test
+    fun permissionResultIsRecheckedAgainstProviderState() =
+        runTest {
+            val health = FakeHealth(HealthAvailability.AVAILABLE).apply { granted = emptySet() }
+            val viewModel =
+                MainViewModel(
+                    DeviceRepository(FakeApi(), InMemoryTokenStore(), { "install" }),
+                    health,
+                )
+
+            assertEquals(health.basePermissions, viewModel.requestBasePermissions())
+            health.granted = health.basePermissions
+            viewModel.onPermissionResult(emptySet())
+
+            assertEquals(HealthOnboardingState.READY, viewModel.state.value.healthState)
+            assertEquals("Доступ к данным Health Connect предоставлен", viewModel.state.value.healthMessage)
+        }
+
+    @Test
+    fun backendRefreshAlsoRefreshesHealthConnectAndShowsSuccess() =
+        runTest {
+            val health = FakeHealth(HealthAvailability.AVAILABLE).apply { granted = emptySet() }
+            val store = InMemoryTokenStore().apply { write("token") }
+            val viewModel =
+                MainViewModel(
+                    DeviceRepository(FakeApi(), store, { "install" }),
+                    health,
+                )
+            assertEquals(HealthOnboardingState.PERMISSIONS_REQUIRED, viewModel.state.value.healthState)
+
+            health.granted = health.basePermissions
+            viewModel.refreshBackendAndHealth()
+
+            assertEquals(HealthOnboardingState.READY, viewModel.state.value.healthState)
+            assertEquals("Backend доступен", viewModel.state.value.backendMessage)
         }
 
     @Test
