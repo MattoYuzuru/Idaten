@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from html import escape
 
 from aiogram import F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -43,7 +44,7 @@ async def setup_group(message: Message, services: AppServices) -> None:
         await message.answer(str(error))
         return
     await message.answer(
-        f"Группа «{result.title}» настроена. Выполните /join, затем настройте sharing в ЛС."
+        f"Группа «{escape(result.title)}» настроена. Выполните /join, затем настройте sharing в ЛС."
     )
 
 
@@ -55,7 +56,7 @@ async def join(message: Message, services: AppServices) -> None:
         await message.answer(str(error))
         return
     await message.answer(
-        f"Вы в группе «{result.title}». Sharing выключен; настройте /share в личном чате."
+        f"Вы в группе «{escape(result.title)}». Sharing выключен; настройте /share в личном чате."
     )
 
 

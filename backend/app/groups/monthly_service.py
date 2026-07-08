@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
+from html import escape
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -213,7 +214,9 @@ def format_month(facts: MonthlyFacts, period_start: date | None = None) -> str:
         goal = f"{facts.distance_m / 1000:.1f}/{facts.goal_distance_m / 1000:.1f} км ({percent}%)"
     return (
         f"{title}\n\nПробежек: {facts.run_count}\nДистанция: {facts.distance_m / 1000:.2f} км\n"
-        f"Участников: {facts.members}\nБольше всех: {facts.most_distance or '—'}\n"
-        f"Самая длинная: {facts.longest_run or '—'}\nСтабильность: {facts.consistency or '—'}\n"
+        f"Участников: {facts.members}\n"
+        f"Больше всех: {escape(facts.most_distance) if facts.most_distance else '—'}\n"
+        f"Самая длинная: {escape(facts.longest_run) if facts.longest_run else '—'}\n"
+        f"Стабильность: {escape(facts.consistency) if facts.consistency else '—'}\n"
         f"Парных дней: {facts.pair_runs}\nЦель: {goal}"
     )
