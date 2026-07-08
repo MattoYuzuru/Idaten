@@ -76,6 +76,10 @@ class SyncItemResult:
 class SyncBatchResult:
     items: tuple[SyncItemResult, ...]
     cursor: str | None
+    saved_count: int
+    duplicate_count: int
+    skipped_count: int
+    error_count: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import logging
 import uuid
@@ -29,6 +30,7 @@ from .models import (
     DeviceLinkAttempt,
     DeviceLinkCode,
     DeviceScope,
+    HealthConnectSyncBatch,
     SyncStatus,
     TelegramOutbox,
 )
@@ -45,6 +47,7 @@ from .schemas import (
     SyncItemState,
 )
 from .security import hashes_match, keyed_hash, new_device_token, new_link_code, token_device_id
+from .summary import build_batch_summary
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +194,20 @@ class HealthConnectService:
                     )
                 )
                 link.consumed_at = now
+                repository.add(
+                    TelegramOutbox(
+                        user_id=link.user_id,
+                        event_key=f"device-linked:{device_id}:{code_hash[:16]}",
+                        private_chat_id=await repository.private_chat_id(link.user_id),
+                        message_text=(
+                            "✅ <b>Устройство подключено</b>\n\n"
+                            "Откройте Android-приложение, проверьте найденные пробежки "
+                            "и нажмите «Синхронизировать»."
+                        ),
+                        available_at=now,
+                        created_at=now,
+                    )
+                )
                 linked_device = LinkedDevice(
                     device_id, token, DeviceScope.HEALTH_CONNECT_SYNC.value
                 )
@@ -253,9 +270,11 @@ class HealthConnectService:
             device_id = authorized_device.id
             user_id = authorized_device.user_id
 
+        ordered_runs = tuple(sorted(runs, key=lambda item: (item.started_at, item.external_id)))
+        is_batch = len(ordered_runs) > 1
         results: list[SyncItemResult] = []
-        for run in runs:
-            results.append(await self._sync_item(user_id, run))
+        for run in ordered_runs:
+            results.append(await self._sync_item(user_id, run, create_outbox=not is_batch))
 
         errors = [item for item in results if item.state == SyncItemState.ERROR]
         sync_status = (
@@ -278,9 +297,23 @@ class HealthConnectService:
             if stored_cursor is not None:
                 stored_device.last_sync_cursor = stored_cursor[:255]
             result_cursor = stored_device.last_sync_cursor
-        return SyncBatchResult(tuple(results), result_cursor)
+        saved_count = sum(item.state == SyncItemState.SAVED for item in results)
+        duplicate_count = sum(item.state == SyncItemState.DUPLICATE for item in results)
+        error_count = len(errors)
+        if is_batch:
+            await self._create_batch_summary(
+                device_id=device_id,
+                user_id=user_id,
+                runs=ordered_runs,
+                results=tuple(results),
+            )
+        return SyncBatchResult(
+            tuple(results), result_cursor, saved_count, duplicate_count, 0, error_count
+        )
 
-    async def _sync_item(self, user_id: uuid.UUID, run: HealthConnectRun) -> SyncItemResult:
+    async def _sync_item(
+        self, user_id: uuid.UUID, run: HealthConnectRun, *, create_outbox: bool
+    ) -> SyncItemResult:
         external_id = run.external_id[:255]
         try:
             if not run.external_id or len(run.external_id) > 255:
@@ -288,7 +321,7 @@ class HealthConnectService:
             normalized = self.adapter.normalize(run)
             validate_normalized(normalized)
             self._validate_samples(normalized)
-            return await self._persist_item(user_id, normalized)
+            return await self._persist_item(user_id, normalized, create_outbox=create_outbox)
         except (HealthConnectError, ImportError) as error:
             return SyncItemResult(
                 external_id=external_id,
@@ -323,7 +356,11 @@ class HealthConnectService:
             )
 
     async def _persist_item(
-        self, user_id: uuid.UUID, normalized: NormalizedActivity
+        self,
+        user_id: uuid.UUID,
+        normalized: NormalizedActivity,
+        *,
+        create_outbox: bool,
     ) -> SyncItemResult:
         series_uri: str | None = None
         series_summary: dict[str, Any] | None = None
@@ -365,6 +402,8 @@ class HealthConnectService:
                     ),
                     avg_hr=normalized.avg_hr,
                     max_hr=normalized.max_hr,
+                    avg_cadence_spm=normalized.avg_cadence_spm,
+                    elevation_gain_m=normalized.elevation_gain_m,
                     visibility=ActivityVisibility.PRIVATE,
                 )
                 activity_repository.add(activity)
@@ -418,16 +457,17 @@ class HealthConnectService:
                         message_private=report.message,
                     )
                 )
-                repository.add(
-                    TelegramOutbox(
-                        user_id=user_id,
-                        activity_id=activity.id,
-                        private_chat_id=await repository.private_chat_id(user_id),
-                        message_text=report.message,
-                        available_at=datetime.now(UTC),
-                        created_at=datetime.now(UTC),
+                if create_outbox:
+                    repository.add(
+                        TelegramOutbox(
+                            user_id=user_id,
+                            activity_id=activity.id,
+                            private_chat_id=await repository.private_chat_id(user_id),
+                            message_text=report.message,
+                            available_at=datetime.now(UTC),
+                            created_at=datetime.now(UTC),
+                        )
                     )
-                )
                 return SyncItemResult(
                     external_id=normalized.external_id or "",
                     state=SyncItemState.SAVED,
@@ -441,6 +481,75 @@ class HealthConnectService:
                     )
                 if persisted is None:
                     await self.storage.delete(series_uri)
+
+    async def _create_batch_summary(
+        self,
+        *,
+        device_id: uuid.UUID,
+        user_id: uuid.UUID,
+        runs: tuple[HealthConnectRun, ...],
+        results: tuple[SyncItemResult, ...],
+    ) -> None:
+        identity = "\n".join(sorted(run.external_id for run in runs))
+        batch_key = hashlib.sha256(f"{device_id}\n{identity}".encode()).hexdigest()
+        saved_ids = tuple(
+            item.activity_id
+            for item in results
+            if item.state == SyncItemState.SAVED and item.activity_id is not None
+        )
+        now = datetime.now(UTC)
+        async with self.session_factory.begin() as session:
+            repository = HealthConnectRepository(session)
+            if await repository.sync_batch_by_key(batch_key) is not None:
+                return
+            user = await session.get(User, user_id)
+            if user is None:
+                raise HealthConnectError("Пользователь не найден.", code="USER_NOT_FOUND")
+            activities: tuple[Activity, ...] = ()
+            if saved_ids:
+                activities = tuple(
+                    (
+                        await session.execute(select(Activity).where(Activity.id.in_(saved_ids)))
+                    ).scalars()
+                )
+            saved = sum(item.state == SyncItemState.SAVED for item in results)
+            duplicate = sum(item.state == SyncItemState.DUPLICATE for item in results)
+            errors = sum(item.state == SyncItemState.ERROR for item in results)
+            batch = HealthConnectSyncBatch(
+                device_id=device_id,
+                user_id=user_id,
+                batch_key=batch_key,
+                period_start=min(run.started_at for run in runs),
+                period_end=max(run.started_at for run in runs),
+                found_count=len(runs),
+                saved_count=saved,
+                duplicate_count=duplicate,
+                skipped_count=0,
+                error_count=errors,
+                created_at=now,
+            )
+            repository.add(batch)
+            await session.flush()
+            repository.add(
+                TelegramOutbox(
+                    user_id=user_id,
+                    batch_id=batch.id,
+                    private_chat_id=await repository.private_chat_id(user_id),
+                    message_text=build_batch_summary(
+                        activities,
+                        timezone=user.timezone,
+                        period_start=batch.period_start,
+                        period_end=batch.period_end,
+                        found=len(runs),
+                        saved=saved,
+                        duplicate=duplicate,
+                        skipped=0,
+                        errors=errors,
+                    ),
+                    available_at=now,
+                    created_at=now,
+                )
+            )
 
     async def _authorize(self, session: AsyncSession, token: str) -> Device:
         device_id = token_device_id(token)

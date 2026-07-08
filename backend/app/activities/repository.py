@@ -4,7 +4,14 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.activities.models import Activity, ActivitySource, ActivityType, SourceType
+from app.activities.models import (
+    Activity,
+    ActivitySource,
+    ActivityType,
+    ManualActivityDraft,
+    ManualDraftStatus,
+    SourceType,
+)
 from app.activities.schemas import ActivitySummary, AggregateStats, RunHistoryItem
 
 
@@ -93,6 +100,7 @@ class ActivityRepository:
         )
         return tuple(
             RunHistoryItem(
+                activity_id=activity.id,
                 started_at=activity.started_at,
                 distance_m=activity.distance_m,
                 elapsed_time_sec=activity.elapsed_time_sec,
@@ -102,3 +110,21 @@ class ActivityRepository:
             )
             for activity in activities
         )
+
+    async def active_manual_draft(self, user_id: uuid.UUID) -> ManualActivityDraft | None:
+        return (
+            await self.session.execute(
+                select(ManualActivityDraft).where(
+                    ManualActivityDraft.user_id == user_id,
+                    ManualActivityDraft.status == ManualDraftStatus.ACTIVE,
+                )
+            )
+        ).scalar_one_or_none()
+
+    async def manual_draft(
+        self, draft_id: uuid.UUID, *, for_update: bool = False
+    ) -> ManualActivityDraft | None:
+        statement = select(ManualActivityDraft).where(ManualActivityDraft.id == draft_id)
+        if for_update:
+            statement = statement.with_for_update()
+        return (await self.session.execute(statement)).scalar_one_or_none()

@@ -7,7 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.activities.models import Activity
 from app.users.models import TelegramAccount
 
-from .models import Device, DeviceLinkAttempt, DeviceLinkCode, OutboxStatus, TelegramOutbox
+from .models import (
+    Device,
+    DeviceLinkAttempt,
+    DeviceLinkCode,
+    HealthConnectSyncBatch,
+    OutboxStatus,
+    TelegramOutbox,
+)
 
 
 class HealthConnectRepository:
@@ -73,6 +80,13 @@ class HealthConnectRepository:
         if chat_id is None:
             raise RuntimeError("Device user has no Telegram account")
         return int(chat_id)
+
+    async def sync_batch_by_key(self, batch_key: str) -> HealthConnectSyncBatch | None:
+        return (
+            await self.session.execute(
+                select(HealthConnectSyncBatch).where(HealthConnectSyncBatch.batch_key == batch_key)
+            )
+        ).scalar_one_or_none()
 
     async def pending_outbox(
         self, now: datetime, *, lease_before: datetime, limit: int

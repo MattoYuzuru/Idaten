@@ -93,3 +93,33 @@ async def test_manual_run_updates_stats_week_pr_and_report(
         report_count = await session.scalar(select(func.count(CoachReport.id)))
     assert activity_count == 2
     assert report_count == 2
+
+
+@pytest.mark.asyncio
+async def test_persistent_manual_draft_confirm_is_idempotent(
+    service_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, session_factory = service_context
+    draft = await services.activities.start_manual_draft(
+        identity(), datetime(2026, 7, 8, 12, tzinfo=UTC)
+    )
+    await services.activities.set_manual_draft_field(42, draft.draft_id, "distance", "10.02")
+    await services.activities.set_manual_draft_field(42, draft.draft_id, "elapsed", "1:02:41")
+    await services.activities.set_manual_draft_field(42, draft.draft_id, "hr", "152")
+    await services.activities.set_manual_draft_field(42, draft.draft_id, "max_hr", "178")
+    await services.activities.set_manual_draft_field(42, draft.draft_id, "cadence", "171")
+    await services.activities.set_manual_draft_field(42, draft.draft_id, "elevation", "164")
+    await services.activities.set_manual_draft_field(42, draft.draft_id, "title", "Tempo <private>")
+
+    first = await services.activities.confirm_manual_draft(42, draft.draft_id)
+    repeated = await services.activities.confirm_manual_draft(42, draft.draft_id)
+
+    assert repeated.activity.activity_id == first.activity.activity_id
+    async with session_factory() as session:
+        activities = (await session.execute(select(Activity))).scalars().all()
+        assert len(activities) == 1
+        assert activities[0].avg_hr == 152
+        assert activities[0].max_hr == 178
+        assert activities[0].avg_cadence_spm == 171
+        assert activities[0].elevation_gain_m == 164
+        assert activities[0].title == "Tempo <private>"

@@ -128,3 +128,29 @@
   где Health Connect не позволял пользователю выдать cadence, из-за чего весь sync flow
   оставался недоступен. Cadence является дополнительным sample, а не обязательным полем
   Activity; отсутствие optional sample уже поддерживается backend ingestion.
+
+## ADR-013 — source sessions, manual drafts и batch sync summary
+
+- Дата: 2026-07-08
+- Статус: принято
+- Решение: каждая Health Connect exercise session сохраняется отдельной Activity с
+  исходным external ID; объединение выполняется только в presentation DTO по локальной
+  календарной дате пользователя. Backend сортирует входной sync batch по
+  `(started_at, external_id)` и не считает порядок Android доверенным. Для batch из
+  нескольких элементов создается одна запись `health_connect_sync_batches` и один
+  durable Telegram outbox event; identity batch детерминированно строится из device и
+  набора external ID, а per-activity unique constraint остается источником
+  идемпотентности persistence. Одиночный sync сохраняет существующий after-run outbox.
+  Поле cursor остается internal status metadata и не обещает incremental read, пока
+  Health Connect paging ограничивается явными lookback/page limits.
+- Решение: aggregate cadence и elevation gain хранятся nullable typed columns Activity
+  с range constraints. Кнопочный ручной ввод использует persistent typed
+  `manual_activity_drafts`: один ACTIVE draft на пользователя, expiry, optimistic
+  version и terminal SAVED/CANCELLED/EXPIRED states. Confirm вызывает тот же
+  `ActivityService` use case, что slash-команда; Telegram callback несет только opaque
+  draft ID и действие.
+- Причина: совпадение календарного дня не доказывает, что source sessions можно
+  безопасно склеить; item transactions должны переживать partial batch failure, а
+  Telegram retry не должен создавать N отчетов или повторный summary. Persistent draft
+  делает restart/callback retry безопасными и не прячет queryable activity metrics в
+  untyped JSON.

@@ -101,8 +101,18 @@ def test_link_sync_status_and_safe_item_error(tmp_path: Path) -> None:
             },
         )
         assert sync.status_code == 200
-        assert [item["status"] for item in sync.json()["items"]] == ["saved", "error"]
-        assert sync.json()["items"][1]["error_code"] == "INVALID_DISTANCE"
+        assert [item["external_id"] for item in sync.json()["items"]] == [
+            "api-invalid",
+            "api-valid",
+        ]
+        assert [item["status"] for item in sync.json()["items"]] == ["error", "saved"]
+        assert sync.json()["items"][0]["error_code"] == "INVALID_DISTANCE"
+        assert sync.json()["counts"] == {
+            "saved": 1,
+            "duplicate": 0,
+            "skipped": 0,
+            "error": 1,
+        }
         assert "traceback" not in sync.text.lower()
         status_response = client.get(
             "/health-connect/sync/status",

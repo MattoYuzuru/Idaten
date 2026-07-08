@@ -124,6 +124,12 @@ async def sync_activities(
         raise _http_error(error) from error
     return {
         "cursor": result.cursor,
+        "counts": {
+            "saved": result.saved_count,
+            "duplicate": result.duplicate_count,
+            "skipped": result.skipped_count,
+            "error": result.error_count,
+        },
         "items": [
             {
                 "external_id": item.external_id,

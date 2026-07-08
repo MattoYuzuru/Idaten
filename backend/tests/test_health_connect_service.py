@@ -20,6 +20,7 @@ from app.health_connect.models import (
     DeviceLinkAttempt,
     DeviceLinkCode,
     DeviceScope,
+    HealthConnectSyncBatch,
     OutboxStatus,
     TelegramOutbox,
 )
@@ -241,7 +242,10 @@ async def test_partial_batch_duplicate_optional_records_and_private_series(
         (run("saved", samples=samples), run("invalid", distance_m=-1)),
         "cursor-partial",
     )
-    assert [item.state for item in result.items] == [SyncItemState.SAVED, SyncItemState.ERROR]
+    assert [item.external_id for item in result.items] == ["invalid", "saved"]
+    assert [item.state for item in result.items] == [SyncItemState.ERROR, SyncItemState.SAVED]
+    assert result.saved_count == 1
+    assert result.error_count == 1
     assert result.cursor is None
 
     duplicate = await services.health_connect.sync(token, (run("saved", samples=samples),), "c2")
@@ -257,7 +261,8 @@ async def test_partial_batch_duplicate_optional_records_and_private_series(
         assert all(activity.visibility == ActivityVisibility.PRIVATE for activity in activities)
         assert all(activity.source_type == SourceType.HEALTH_CONNECT for activity in activities)
         assert await session.scalar(select(func.count(CoachReport.id))) == 2
-        assert await session.scalar(select(func.count(TelegramOutbox.id))) == 2
+        assert await session.scalar(select(func.count(TelegramOutbox.id))) == 3
+        assert await session.scalar(select(func.count(HealthConnectSyncBatch.id))) == 1
         series = (await session.execute(select(ActivitySeries))).scalar_one()
         outbox = (await session.execute(select(TelegramOutbox).limit(1))).scalar_one()
         assert "150" not in outbox.message_text
@@ -283,6 +288,14 @@ async def test_outbox_retry_and_delivery_are_idempotent(
 ) -> None:
     services, session_factory = health_context
     token, _ = await linked(services)
+    bootstrap_outbox = TelegramOutboxService(session_factory, retry_seconds=0, max_attempts=3)
+
+    async def bootstrap_send(chat_id: int, message: str) -> int:
+        assert chat_id == 42
+        assert "Устройство подключено" in message
+        return 100
+
+    assert await bootstrap_outbox.deliver_pending(bootstrap_send) == 1
     await services.health_connect.sync(token, (run(),), "cursor")
     outbox = TelegramOutboxService(session_factory, retry_seconds=0, max_attempts=3)
     attempts = 0
@@ -301,8 +314,42 @@ async def test_outbox_retry_and_delivery_are_idempotent(
     assert await outbox.deliver_pending(flaky_send) == 0
     assert attempts == 2
     async with session_factory() as session:
-        record = (await session.execute(select(TelegramOutbox))).scalar_one()
+        record = (
+            await session.execute(
+                select(TelegramOutbox).where(TelegramOutbox.activity_id.is_not(None))
+            )
+        ).scalar_one()
         assert record.status == OutboxStatus.DELIVERED
         assert record.attempts == 2
         assert record.telegram_message_id == 777
         assert await session.scalar(select(func.count(Activity.id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_sync_is_chronological_and_summary_is_idempotent(
+    health_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, session_factory = health_context
+    token, _ = await linked(services)
+    newer = run("newer")
+    older = HealthConnectRun(
+        external_id="older",
+        started_at=datetime(2026, 7, 5, 6, tzinfo=UTC),
+        timezone="Europe/Moscow",
+        distance_m=5_000,
+        elapsed_time_sec=1_800,
+    )
+
+    first = await services.health_connect.sync(token, (newer, older), None)
+    second = await services.health_connect.sync(token, (older, newer), None)
+
+    assert [item.external_id for item in first.items] == ["older", "newer"]
+    assert all(item.state == SyncItemState.SAVED for item in first.items)
+    assert all(item.state == SyncItemState.DUPLICATE for item in second.items)
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count(Activity.id))) == 2
+        assert await session.scalar(select(func.count(HealthConnectSyncBatch.id))) == 1
+        batch_outboxes = await session.scalar(
+            select(func.count(TelegramOutbox.id)).where(TelegramOutbox.batch_id.is_not(None))
+        )
+        assert batch_outboxes == 1
