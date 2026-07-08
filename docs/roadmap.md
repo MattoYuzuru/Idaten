@@ -51,7 +51,21 @@ PostgreSQL database/user, Kubernetes Secret и PVC.
 
 Подробности: [mvp-0.6.md](iterations/mvp-0.6.md).
 
-## После MVP 0.6
+## MVP 0.7 — reliable sync и guided Telegram UX
+
+Исправляет Health Connect pagination/filter/order, добавляет диагностируемую ручную
+синхронизацию, хронологические и сгруппированные по дням обзоры без склейки исходных
+Activity. Расширяет `/run` historical/optional metrics и добавляет persistent кнопочный
+мастер, state-aware onboarding, единый `/menu`, полный `/help`, scoped command menus и
+безопасно форматированные Telegram-сообщения. Initial multi-sync завершается одним
+идемпотентным batch summary вместо серии сообщений.
+
+OCR/screenshots, Samsung ZIP, Mini App и background sync в итерацию не входят.
+
+Подробности: [mvp-0.7.md](iterations/mvp-0.7.md).
+
+## После MVP 0.7
 
 Отдельно оцениваются: Strava private integration, screenshot OCR/vision, web dashboard,
-race search, S3/MinIO, Redis и observability stack. Они не должны заранее усложнять MVP.
+Samsung Health export adapter, background sync, Telegram Mini App, race search,
+S3/MinIO, Redis и observability stack. Они не должны заранее усложнять MVP.

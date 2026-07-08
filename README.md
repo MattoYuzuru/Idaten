@@ -14,6 +14,7 @@ manifests для существующего k3s. Coach, imports и privacy/sourc
 - [Инструкция для следующего агента](docs/agent-handoff.md)
 - [Журнал решений](docs/decision-log.md)
 - [Спецификация MVP 0.6](docs/iterations/mvp-0.6.md)
+- [План следующей итерации MVP 0.7](docs/iterations/mvp-0.7.md)
 - [Спецификации следующих MVP](docs/iterations/)
 - [Локальный запуск](docs/deployment.md)
 
