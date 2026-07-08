@@ -47,6 +47,15 @@ data class SyncItemResponse(
 data class SyncResponse(
     val cursor: String? = null,
     val items: List<SyncItemResponse>,
+    val counts: SyncCounts = SyncCounts(),
+)
+
+@Serializable
+data class SyncCounts(
+    val saved: Int = 0,
+    val duplicate: Int = 0,
+    val skipped: Int = 0,
+    val error: Int = 0,
 )
 
 @Serializable

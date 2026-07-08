@@ -52,6 +52,7 @@ import dev.idaten.companion.health.HealthConnectExternalActions
 import dev.idaten.companion.health.HealthOnboardingState
 import dev.idaten.companion.model.RunItem
 import dev.idaten.companion.model.RunMappingResult
+import dev.idaten.companion.model.RunSkipReason
 
 class MainActivity : ComponentActivity() {
     private val health by lazy { AndroidHealthConnectSource(this) }
@@ -282,6 +283,11 @@ private fun runsScreen(
         Button(onClick = load, enabled = healthReady && !state.loadingRuns) { Text("Последние пробежки") }
         Button(onClick = sync, enabled = healthReady && state.linked && !state.syncing) { Text("Синхронизировать") }
     }
+    state.runSearchSummary?.let { summary ->
+        Text("Период: ${summary.searchedFrom.take(10)} — ${summary.searchedUntil.take(10)} · страниц: ${summary.pagesRead}")
+        Text("Найдено: ${summary.found} · готово: ${summary.ready} · пропущено: ${summary.skipped} · ошибок: ${summary.errors}")
+        if (summary.nonRunning > 0) Text("Других тренировок пропущено: ${summary.nonRunning}")
+    }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(state.runs, key = { it.raw.externalId }) { item -> runRow(item, requestRoute) }
     }
@@ -296,7 +302,7 @@ private fun runRow(
         Text(item.raw.title ?: "Пробежка", style = MaterialTheme.typography.titleMedium)
         Text("${item.raw.startedAt} · ${item.raw.distanceMeters ?: "дистанция недоступна"} м")
         when (val mapping = item.mapping) {
-            is RunMappingResult.Invalid -> Text(mapping.reason, color = MaterialTheme.colorScheme.error)
+            is RunMappingResult.Invalid -> Text(mapping.reason.userMessage(), color = MaterialTheme.colorScheme.error)
             is RunMappingResult.Ready -> Text(item.syncStatus ?: "Готово к синхронизации")
         }
         item.syncMessage?.let { Text(it) }
@@ -305,3 +311,10 @@ private fun runRow(
         }
     }
 }
+
+private fun RunSkipReason.userMessage(): String =
+    when (this) {
+        RunSkipReason.MISSING_DISTANCE -> "Пропущено: отсутствует обязательная дистанция"
+        RunSkipReason.INVALID_DURATION -> "Пропущено: некорректная длительность"
+        RunSkipReason.READ_ERROR -> "Ошибка чтения записи Health Connect"
+    }

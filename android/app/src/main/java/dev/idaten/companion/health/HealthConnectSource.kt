@@ -14,9 +14,11 @@ import androidx.health.connect.client.records.StepsCadenceRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import dev.idaten.companion.model.HealthAvailability
+import dev.idaten.companion.model.HealthRunSearchResult
 import dev.idaten.companion.model.HealthSample
 import dev.idaten.companion.model.PermissionState
 import dev.idaten.companion.model.RawHealthRun
+import dev.idaten.companion.model.RunSkipReason
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -29,12 +31,61 @@ interface HealthConnectSource {
 
     suspend fun permissionState(): PermissionState
 
-    suspend fun latestRuns(limit: Int = 20): List<RawHealthRun>
+    suspend fun latestRuns(limit: Int = DEFAULT_RUN_LIMIT): HealthRunSearchResult
 
     fun withRoute(
         run: RawHealthRun,
         route: ExerciseRoute,
     ): RawHealthRun
+}
+
+const val DEFAULT_RUN_LIMIT = 20
+internal const val HEALTH_PAGE_SIZE = 20
+internal const val MAX_HEALTH_PAGES = 10
+internal const val HEALTH_LOOKBACK_DAYS = 180L
+
+internal data class SessionPage<T>(
+    val records: List<T>,
+    val nextToken: String?,
+)
+
+internal data class BoundedSelection<T>(
+    val records: List<T>,
+    val pagesRead: Int,
+    val nonMatchingCount: Int,
+    val exhausted: Boolean,
+)
+
+internal suspend fun <T> collectBoundedMatches(
+    limit: Int,
+    maximumPages: Int,
+    loadPage: suspend (String?) -> SessionPage<T>,
+    matches: (T) -> Boolean,
+): BoundedSelection<T> {
+    require(limit in 1..100)
+    require(maximumPages > 0)
+    val selected = mutableListOf<T>()
+    var token: String? = null
+    var pagesRead = 0
+    var nonMatching = 0
+    var exhausted = false
+    while (selected.size < limit && pagesRead < maximumPages) {
+        val page = loadPage(token)
+        pagesRead += 1
+        page.records.forEach { record ->
+            if (matches(record) && selected.size < limit) {
+                selected += record
+            } else if (!matches(record)) {
+                nonMatching += 1
+            }
+        }
+        token = page.nextToken
+        if (token == null) {
+            exhausted = true
+            break
+        }
+    }
+    return BoundedSelection(selected, pagesRead, nonMatching, exhausted)
 }
 
 class AndroidHealthConnectSource(
@@ -70,21 +121,80 @@ class AndroidHealthConnectSource(
         )
     }
 
-    override suspend fun latestRuns(limit: Int): List<RawHealthRun> {
+    override suspend fun latestRuns(limit: Int): HealthRunSearchResult {
+        require(limit in 1..100)
         val state = permissionState()
-        if (!state.baseGranted) return emptyList()
-        val sessions =
-            client
-                .readRecords(
-                    ReadRecordsRequest(
-                        recordType = ExerciseSessionRecord::class,
-                        timeRangeFilter = TimeRangeFilter.before(Instant.now()),
-                        ascendingOrder = false,
-                        pageSize = limit.coerceIn(1, 100),
-                    ),
-                ).records
-                .filter { it.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_RUNNING }
-        return sessions.map { session -> readRun(session, state.canReadRoute, cadencePermission in state.granted) }
+        val until = Instant.now()
+        val from = until.minus(Duration.ofDays(HEALTH_LOOKBACK_DAYS))
+        if (!state.baseGranted) {
+            return HealthRunSearchResult(
+                emptyList(),
+                from.toString(),
+                until.toString(),
+                0,
+                0,
+                exhausted = true,
+                olderRecordsExist = false,
+            )
+        }
+        val selection =
+            collectBoundedMatches(
+                limit = limit,
+                maximumPages = MAX_HEALTH_PAGES,
+                loadPage = { pageToken ->
+                    val response =
+                        client.readRecords(
+                            ReadRecordsRequest(
+                                recordType = ExerciseSessionRecord::class,
+                                timeRangeFilter = TimeRangeFilter.between(from, until),
+                                ascendingOrder = false,
+                                pageSize = HEALTH_PAGE_SIZE,
+                                pageToken = pageToken,
+                            ),
+                        )
+                    SessionPage(response.records, response.pageToken)
+                },
+                matches = { it.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_RUNNING },
+            )
+        val runs =
+            selection.records.map { session ->
+                runCatching { readRun(session, state.canReadRoute, cadencePermission in state.granted) }
+                    .getOrElse {
+                        RawHealthRun(
+                            externalId = session.metadata.id,
+                            startedAt = session.startTime.toString(),
+                            timezone = ZoneId.systemDefault().id,
+                            distanceMeters = null,
+                            elapsedSeconds = Duration.between(session.startTime, session.endTime).seconds,
+                            title = session.title,
+                            readIssue = RunSkipReason.READ_ERROR,
+                        )
+                    }
+            }
+        val olderRecordsExist =
+            if (runs.isEmpty()) {
+                client
+                    .readRecords(
+                        ReadRecordsRequest(
+                            recordType = ExerciseSessionRecord::class,
+                            timeRangeFilter = TimeRangeFilter.before(from),
+                            ascendingOrder = false,
+                            pageSize = 1,
+                        ),
+                    ).records
+                    .isNotEmpty()
+            } else {
+                false
+            }
+        return HealthRunSearchResult(
+            runs = runs,
+            searchedFrom = from.toString(),
+            searchedUntil = until.toString(),
+            pagesRead = selection.pagesRead,
+            nonRunningCount = selection.nonMatchingCount,
+            exhausted = selection.exhausted,
+            olderRecordsExist = olderRecordsExist,
+        )
     }
 
     private suspend fun readRun(
