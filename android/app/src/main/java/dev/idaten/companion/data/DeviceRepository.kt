@@ -32,8 +32,7 @@ class DeviceRepository(
 
     suspend fun sync(request: SyncRequest): SyncResponse = api.sync(requireToken(), request)
 
-    fun beginSyncBatch(): String =
-        syncBatchStore.read() ?: UUID.randomUUID().toString().also(syncBatchStore::write)
+    fun beginSyncBatch(): String = syncBatchStore.read() ?: UUID.randomUUID().toString().also(syncBatchStore::write)
 
     fun completeSyncBatch() = syncBatchStore.clear()
 

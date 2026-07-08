@@ -4,8 +4,8 @@ import dev.idaten.companion.data.ApiException
 import dev.idaten.companion.data.DeviceRepository
 import dev.idaten.companion.data.DeviceStatusResponse
 import dev.idaten.companion.data.IdatenApi
-import dev.idaten.companion.data.InMemoryTokenStore
 import dev.idaten.companion.data.InMemorySyncBatchStore
+import dev.idaten.companion.data.InMemoryTokenStore
 import dev.idaten.companion.data.LinkCompleteRequest
 import dev.idaten.companion.data.LinkCompleteResponse
 import dev.idaten.companion.data.SyncRequest
