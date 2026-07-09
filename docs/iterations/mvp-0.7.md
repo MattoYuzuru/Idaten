@@ -385,7 +385,7 @@ JSON draft допустим только для действительно optio
 - [ ] Physical-device и Telegram UX acceptance пройдены.
 - [x] README/deployment/handoff обновлены, draft PR опубликован.
 
-## Результат pre-production gate
+## Результат release/production gate
 
 - Backend: Ruff format/check, strict mypy и 94 pytest прошли.
 - Android: 23 unit tests, Spotless, debug assembly и lint прошли. Signed release assembly
@@ -395,15 +395,24 @@ JSON draft допустим только для действительно optio
 - Docker Compose: image build, migrations, `/health` и `/ready` прошли; volumes и
   containers удалены после smoke.
 - Deployment: provisioning unit tests, shellcheck и kustomize assertions прошли.
-- GitHub PR #11 CI run `28974031553`: backend, Android signed release/APK verification,
-  image и deployment jobs прошли.
+- GitHub PR #11 CI run `28974031553` и main CI run `28974371151`: backend, Android
+  signed release/APK verification, image и deployment jobs прошли.
+- Release `v0.7.0` опубликован из merge commit
+  `1775b3d51a4425ac8f6f11bc70076f2302a463ec`; release run `28996693584` прошел. APK
+  artifact checksum и `apksigner verify` проверены после скачивания.
+- Production rollout выполнен 2026-07-09 на image digest
+  `sha256:7cc63d6b92509b8771b3e8b6e925735bab04d29fe27151eefe6cb5bbc04565cc`.
+  Перед rollout созданы и проверены DB/storage backups. После rollout: один Ready pod
+  без restart, certificate `Ready=True`, Alembic current `20260708_0006 (head)`,
+  Alembic check без новых операций, `/health`, `/ready`, HTTP→HTTPS redirect и TLS
+  verification прошли.
 - Bot API 10.1 spike: aiogram 3.29.1 содержит `sendRichMessage`, но целевые Telegram
   клиенты не подтверждены; выбран обязательный HTML fallback без streaming rich drafts.
 
-Open release blocker: `adb devices -l` не показал подключенного физического устройства,
-поэтому mixed-history/route/upgrade checklist и live Telegram UX еще не выполнены. До
-этой проверки нельзя отмечать acceptance criterion 13, создавать `v0.7.0` и выполнять
-production rollout.
+Manual acceptance gap: `adb devices -l` не показал подключенного физического устройства,
+поэтому mixed-history/route/upgrade checklist и live Telegram UX еще не выполнены.
+Tag/release/deploy выполнены по явному production confirmation владельца; acceptance
+criterion 13 остается частично открытым до ручной проверки на телефоне.
 
 ## Known limitations после MVP 0.7
 
