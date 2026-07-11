@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from html import escape
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -55,7 +56,7 @@ class CoachService:
         async with self.session_factory.begin() as session:
             user = await self._require_user(session, telegram_user_id)
             facts, sources = await self._facts(session, user, now)
-            recommendation = recommend_next(facts)
+            recommendation = recommend_next(facts, as_of=now, timezone=user.timezone)
             template = format_recommendation(recommendation)
             report = CoachReport(
                 user_id=user.id,
@@ -77,12 +78,12 @@ class CoachService:
                 allowlisted_payload(facts.as_json(), recommendation.as_json())
             )
             if result.message is not None:
-                message = result.message
+                message = f"{template}\n\n<b>Комментарий</b>\n{escape(result.message)}"
                 provider_name = result.provider.value
                 async with self.session_factory.begin() as session:
                     stored = await CoachRepository(session).report(report_id)
                     if stored is not None:
-                        stored.message_private = result.message
+                        stored.message_private = message
                         stored.provider = result.provider.value
                         stored.provider_model = result.model
                         stored.prompt_hash = result.prompt_hash
@@ -124,7 +125,9 @@ class CoachService:
             for index, weekly_target in enumerate(targets, start=1):
                 distance = max(3_000, weekly_target * 30 // 100)
                 pace = facts.average_pace_30d
+                scheduled = starts_on + timedelta(days=(index - 1) * 7 + 2)
                 recommendation = WorkoutRecommendation(
+                    scheduled,
                     workout_type=RunClassification.EASY,
                     distance_m=distance,
                     duration_sec=max(1_800, distance * ((pace or 360) + 35) // 1000),
@@ -135,8 +138,8 @@ class CoachService:
                         "без роста >10%."
                     ),
                     risk_flags=facts.risk_flags,
+                    observations=(),
                 )
-                scheduled = starts_on + timedelta(days=(index - 1) * 7 + 2)
                 repository.add_workout(
                     PlannedWorkout(
                         plan_id=plan.id,
@@ -209,13 +212,30 @@ def format_recommendation(recommendation: WorkoutRecommendation) -> str:
             f"{format_pace(recommendation.pace_min_sec_per_km)}–"
             f"{format_pace(recommendation.pace_max_sec_per_km)}/км"
         )
-    flags = ", ".join(recommendation.risk_flags) or "нет"
+    workout_type = {
+        RunClassification.EASY: "лёгкая пробежка",
+        RunClassification.RECOVERY: "восстановительная пробежка",
+        RunClassification.STEADY: "спокойная пробежка",
+        RunClassification.TEMPO: "темповая пробежка",
+        RunClassification.INTERVAL: "интервальная тренировка",
+        RunClassification.LONG_RUN: "длинная пробежка",
+        RunClassification.RACE: "забег",
+        RunClassification.UNKNOWN: "пробежка",
+    }[recommendation.workout_type]
+    observations = (
+        "\n".join(f"• {item}" for item in recommendation.observations)
+        if recommendation.observations
+        else "Наблюдений, требующих дополнительной осторожности, нет."
+    )
     return (
         "<b>Следующая тренировка</b>\n\n"
-        f"Тип: {recommendation.workout_type.value}\n"
+        f"Дата: <b>не раньше {recommendation.recommended_on:%d.%m.%Y}</b>\n"
+        f"Тип: {workout_type}\n"
         f"Дистанция: <b>{recommendation.distance_m / 1000:.2f} км</b>\n"
         f"Длительность: {format_duration(recommendation.duration_sec)}\n"
-        f"Темп: {pace}\nПричина: {recommendation.reason}\nРиски: {flags}"
+        f"Темп: {pace}\n\nПричина: {recommendation.reason}\n\n"
+        f"<b>Что учтено</b>\n{observations}\n\n"
+        "Это консервативная эвристика, а не медицинская рекомендация."
     )
 
 

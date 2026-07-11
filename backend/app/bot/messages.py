@@ -1,87 +1,138 @@
 # ruff: noqa: E501
+from datetime import timedelta
 from html import escape
 from zoneinfo import ZoneInfo
 
 from app.activities.models import DraftInputMethod
 from app.activities.schemas import (
-    ActivitySummary,
-    AggregateStats,
     DailyRunGroup,
     ManualDraft,
-    PersonalRecords,
 )
-from app.analytics.metrics import format_duration
+from app.analytics.metrics import format_duration, format_pace
+from app.analytics.personal import (
+    PersonalProgress,
+    PersonalRecords,
+    ProgressTotals,
+    ResultCandidate,
+)
 from app.groups.models import ShareLevel
 from app.groups.schemas import GroupWeek, LeaderboardEntry, PrivacyOverview, StreakEntry
-from app.ingestion.schemas import ImportHistoryItem, ImportPreview
+from app.ingestion.schemas import ImportPreview
+
+REPOSITORY_URL = "https://github.com/MattoYuzuru/Idaten"
 
 HELP_TEXT = (
-    "<b>Idaten 0.8</b>\n\n"
-    "Сохраняет private-пробежки, синхронизирует Health Connect и показывает прогресс. "
-    "Выберите раздел справки ниже."
+    "<b>Idaten 0.9</b>\n\n"
+    "Сохраняет пробежки приватно, показывает личный прогресс и предлагает следующую "
+    "спокойную тренировку. Выберите раздел."
 )
 
 HELP_SECTIONS = {
-    "start": """<b>Старт и меню</b>
+    "start": """<b>С чего начать</b>
 
-/start — private — регистрация и onboarding. Пример: /start. Результат: путь подключения или главное меню.
-/menu — private — основные действия кнопками. Пример: /menu. Результат: главное меню.
-/help — private/group — полная справка по категориям. Пример: /help.""",
-    "activities": """<b>Активности и аналитика</b>
+Откройте /menu и выберите «Добавить пробежку». Можно ввести данные по шагам, описать одну пробежку текстом или отправить JPEG/PNG-скриншот. Новая пробежка всегда остаётся private.""",
+    "activities": """<b>Пробежки и прогресс</b>
 
-/run — private — выбор: ввод по шагам, описание текстом или JPEG/PNG-скриншот. Text и screenshot требуют отдельного consent и доступа владельца; raw input не сохраняется.
-/run &lt;км&gt; &lt;MM:SS|H:MM:SS&gt; [date=YYYY-MM-DD] [time=HH:MM] [moving=H:MM:SS] [hr=&lt;avg&gt;] [max_hr=&lt;max&gt;] [cadence=&lt;spm&gt;] [elevation=&lt;м&gt;] [title=&quot;...&quot;] [tz=&lt;IANA&gt;]
-Пример: /run 21.10 1:55:30 date=2026-06-16 time=07:30 hr=152 max_hr=178 cadence=171 elevation=164 title=&quot;Полумарафон&quot;.
-Результат: private Activity, отчет и отдельный opt-in на публикацию.
-/stats — private — статистика за всё время. /week — private/group — текущая неделя.
-/pr — private — зарегистрированные 5K/10K. /next — private — следующая тренировка.
-/plan &lt;FIRST_10K|HALF|MARATHON|CUSTOM&gt; [цель] — private. Пример: /plan HALF 1:50.""",
-    "imports": """<b>Импорт файлов</b>
+/run открывает выбор способа добавления. /stats показывает текущую неделю, два 28-дневных окна и график. /pr отделяет фактические результаты от оценок по темпу. /next предлагает консервативную следующую тренировку.""",
+    "imports": """<b>Файлы</b>
 
-Отправьте в private chat GPX, TCX, FIT, CSV или ZIP с одним поддерживаемым файлом. Бот покажет preview; кнопка подтверждения сохраняет Activity.
-/imports — private — последние попытки и статусы. Пример: /imports.""",
+Отправьте в личный чат GPX, TCX, FIT, CSV или ZIP с одним поддерживаемым файлом. Бот покажет preview и сохранит Activity только после подтверждения.""",
     "health": """<b>Health Connect</b>
 
-/link — private — одноразовый код Android. Установите APK, выдайте read permissions, введите код, загрузите последние пробежки и явно нажмите «Синхронизировать».
-/devices — private — связанные устройства. /revoke_device &lt;device_uuid&gt; — private — немедленно отозвать token.
-Telegram сам не читает Health Connect; sync остаётся foreground/manual в Android.""",
-    "privacy": """<b>Privacy и группы</b>
+/link создаёт одноразовый код для Android. /devices показывает подключения, а /revoke_device отзывает выбранное устройство. Синхронизация запускается вручную в Android-приложении.""",
+    "privacy": """<b>Приватность</b>
 
-/privacy [on|off] — private — общий group sharing. /share &lt;chat_id&gt; &lt;none|summary|detailed&gt; — private.
-/setup_group — group admin — настроить группу. /join, /leave — group.
-/month, /leaderboard, /streaks, /week — group. /group_goal &lt;км&gt; — group admin.
-Пример: /share -100123 summary. Activity по умолчанию private; HR, cadence, точное время, route и raw payload в группу не отправляются.""",
-    "external": """<b>Внешняя обработка</b>
-
-/external_processing on|off — private. По умолчанию off. При on внешний provider получает только allowlisted facts и каноническую рекомендацию, но не raw activity, GPS/route или токены.
-Пример: /external_processing off.
-
-Распознавание text/screenshot имеет отдельное versioned consent, owner approval и лимиты. Оно не включает внешний coach wording автоматически.""",
+/privacy открывает настройки кнопками. Новая пробежка private. Групповой sharing разрешает публикацию только в уже подключённые группы; конкретная Activity всё равно требует отдельного opt-in, если не включено «публиковать всегда». Маршрут, пульс, raw payload и точное время в группу не отправляются.""",
 }
 
 
-def format_stats(stats: AggregateStats, title: str) -> str:
-    safe_title = escape(title)
-    if stats.run_count == 0:
-        return f"<b>{safe_title}</b>\n\nПробежек пока нет. Добавьте: /run 5 30:00"
+def _format_progress_totals(stats: ProgressTotals) -> str:
+    pace = (
+        "нет данных"
+        if stats.average_pace_sec_per_km is None
+        else f"{format_pace(stats.average_pace_sec_per_km)}/км"
+    )
     return (
-        f"<b>{safe_title}</b>\n\n"
         f"Пробежек: <b>{stats.run_count}</b>\n"
         f"Дистанция: <b>{stats.distance_m / 1000:.2f} км</b>\n"
-        f"Самая длинная: {stats.longest_run_m / 1000:.2f} км"
+        f"Время: {format_duration(stats.elapsed_time_sec)}\n"
+        f"Самая длинная: {stats.longest_run_m / 1000:.2f} км\n"
+        f"Средний темп: {pace}"
     )
 
 
-def _format_record(label: str, record: ActivitySummary | None) -> str:
+def format_stats(stats: PersonalProgress, title: str = "Личный прогресс") -> str:
+    safe_title = escape(title)
+    current = stats.current_week
+    period = f"{current.starts_on:%d.%m}–{(current.ends_on - timedelta(days=1)):%d.%m}"
+    if stats.usual_weekly_distance_m:
+        difference = current.totals.distance_m - stats.usual_weekly_distance_m
+        if difference == 0:
+            comparison = "ровно средний объём предыдущих 4 недель"
+        else:
+            comparison = (
+                f"на {abs(difference) / 1000:.1f} км "
+                f"{'выше' if difference > 0 else 'ниже'} среднего за предыдущие 4 недели"
+            )
+    else:
+        comparison = "пока недостаточно прошлых недель для сравнения"
+    if stats.previous_28_days.distance_m:
+        delta = (
+            (stats.current_28_days.distance_m - stats.previous_28_days.distance_m)
+            * 100
+            / stats.previous_28_days.distance_m
+        )
+        window_comparison = f"Изменение к предыдущим 28 дням: {delta:+.0f}%"
+    else:
+        window_comparison = "Для сравнения с предыдущими 28 днями пока нет данных."
+    maximum = max((week.totals.distance_m for week in stats.weeks), default=0)
+    bars = "▁▂▃▄▅▆▇█"
+    graph = []
+    for week in stats.weeks:
+        level = 0 if maximum == 0 else round(week.totals.distance_m * 7 / maximum)
+        graph.append(
+            f"{week.starts_on:%d.%m} · {bars[level]} · {week.totals.distance_m / 1000:.1f} км"
+        )
+    return (
+        f"<b>{safe_title}</b>\n\n"
+        f"<b>Текущая неделя · {period}</b>\n"
+        f"{_format_progress_totals(current.totals)}\n"
+        f"Сравнение: {comparison}.\n\n"
+        "<b>Последние 28 дней</b>\n"
+        f"{_format_progress_totals(stats.current_28_days)}\n"
+        f"{window_comparison}\n\n"
+        "<b>8 недель</b>\n"
+        + "\n".join(graph)
+        + "\n\n<b>За всё время</b>\n"
+        + _format_progress_totals(stats.all_time)
+    )
+
+
+def _format_record(record: ResultCandidate | None) -> str:
     if record is None:
-        return f"{label}: пока нет подходящей пробежки"
-    return f"{label}: <b>{format_duration(record.elapsed_time_sec)}</b> · {record.distance_m / 1000:.2f} км"
+        return "Фактический результат: пока нет подходящей пробежки"
+    return (
+        f"Фактический результат: <b>{format_duration(record.elapsed_time_sec)}</b> · "
+        f"{record.distance_m / 1000:.2f} км · {record.started_at:%d.%m.%Y} · "
+        f"{format_pace(record.avg_pace_sec_per_km)}/км"
+    )
 
 
 def format_personal_records(records: PersonalRecords) -> str:
-    return "<b>Личные результаты</b>\n\n" + "\n".join(
-        (_format_record("5K", records.best_5k), _format_record("10K", records.best_10k))
-    )
+    lines = ["<b>Результаты и оценки</b>"]
+    for result in records.results:
+        lines.extend((f"\n<b>{result.distance.label}</b>", _format_record(result.actual)))
+        if result.estimate is None:
+            lines.append("Оценка по средней скорости тренировки: нет данных")
+        else:
+            estimate = result.estimate
+            lines.append(
+                "Оценка по средней скорости тренировки: "
+                f"<b>{format_duration(estimate.estimated_duration_sec)}</b> · источник "
+                f"{estimate.source_distance_m / 1000:.2f} км ({estimate.started_at:%d.%m.%Y})"
+            )
+    lines.append("\nОценка не является рекордом на отрезке: для него нужны splits/best efforts.")
+    return "\n".join(lines)
 
 
 def format_manual_draft(draft: ManualDraft) -> str:
@@ -148,20 +199,24 @@ def format_run_history(groups: tuple[DailyRunGroup, ...], offset: int = 0, size:
 
 
 def format_privacy(overview: PrivacyOverview) -> str:
-    state = "включен" if overview.group_sharing_enabled else "выключен"
-    lines = [f"Групповой sharing: {state}"]
+    state = "включён" if overview.group_sharing_enabled else "выключен"
+    lines = [
+        "Новая пробежка всегда private.",
+        f"Групповой sharing: <b>{state}</b>.",
+        "Уровни: нет · кратко · подробно. Публикация требует opt-in активности, "
+        "если для группы не выбрано «всегда».",
+    ]
     if not overview.groups:
-        lines.append("Активных групп нет.")
+        lines.append("\nАктивных групп нет. Сначала войдите в беговую группу командой /join.")
     for group in overview.groups:
-        auto = ", всегда" if group.auto_share else ""
-        lines.append(
-            f"{escape(group.title)} ({group.telegram_chat_id}): {group.share_level.value}{auto}"
-        )
-    return "<b>Privacy</b>\n\n" + "\n".join(lines)
-
-
-def format_share_level(group_title: str, share_level: ShareLevel) -> str:
-    return f"Sharing для «{escape(group_title)}»: {share_level.value}."
+        level = {
+            ShareLevel.NONE: "не делиться",
+            ShareLevel.SUMMARY: "кратко",
+            ShareLevel.DETAILED: "подробно",
+        }[group.share_level]
+        auto = " · публиковать всегда" if group.auto_share else ""
+        lines.append(f"\n<b>{escape(group.title)}</b>: {level}{auto}")
+    return "<b>Настройки приватности</b>\n\n" + "\n".join(lines)
 
 
 def format_leaderboard(entries: tuple[LeaderboardEntry, ...]) -> str:
@@ -205,14 +260,3 @@ def format_import_preview(preview: ImportPreview) -> str:
         f"Старт: {preview.started_at:%d.%m.%Y %H:%M %Z}{title}{duplicate}"
         "\n\nДо подтверждения активность не сохранена."
     )
-
-
-def format_import_history(items: tuple[ImportHistoryItem, ...]) -> str:
-    if not items:
-        return "История импортов пуста."
-    lines = [
-        f"{escape(item.filename)} — {item.status}"
-        + (f" ({item.source_type.value})" if item.source_type else "")
-        for item in items
-    ]
-    return "<b>Последние импорты</b>\n\n" + "\n".join(lines)

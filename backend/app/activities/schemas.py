@@ -61,12 +61,6 @@ class AggregateStats:
 
 
 @dataclass(frozen=True, slots=True)
-class PersonalRecords:
-    best_5k: ActivitySummary | None
-    best_10k: ActivitySummary | None
-
-
-@dataclass(frozen=True, slots=True)
 class RecordedRun:
     activity: ActivitySummary
     week_stats: AggregateStats

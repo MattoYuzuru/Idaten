@@ -56,7 +56,7 @@ async def join(message: Message, services: AppServices) -> None:
         await message.answer(str(error))
         return
     await message.answer(
-        f"Вы в группе «{escape(result.title)}». Sharing выключен; настройте /share в личном чате."
+        f"Вы в группе «{escape(result.title)}». Sharing выключен; настройте /privacy в ЛС."
     )
 
 

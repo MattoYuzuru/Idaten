@@ -1,10 +1,13 @@
+import asyncio
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from html import escape
 from io import BytesIO
 
 from aiogram import F, Router
-from aiogram.enums import ChatType
+from aiogram.enums import ChatAction, ChatType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
@@ -27,19 +30,16 @@ from app.assisted.schemas import AccessRequestResult, AssistedError, InputGateSt
 from app.bot.messages import (
     HELP_SECTIONS,
     HELP_TEXT,
-    format_import_history,
+    REPOSITORY_URL,
     format_import_preview,
     format_manual_draft,
     format_personal_records,
     format_privacy,
     format_run_history,
-    format_share_level,
     format_stats,
 )
-from app.coach.models import TrainingGoal
 from app.coach.schemas import CoachError
-from app.groups.models import ShareLevel
-from app.groups.schemas import GroupError, ShareTarget
+from app.groups.schemas import GroupError, PrivacyGroupAction, PrivacyOverview, ShareTarget
 from app.health_connect.schemas import HealthConnectError
 from app.ingestion.schemas import ImportError, ImportPreview
 from app.services import AppServices
@@ -78,16 +78,20 @@ async def start(message: Message, services: AppServices) -> None:
         )
         text = (
             f"Привет, {escape(user.display_name)}!\n\n"
-            "Activity по умолчанию <b>private</b>. Устройство уже подключено."
-            f"{status}"
+            "Idaten сохраняет пробежки, показывает личный прогресс и помогает выбрать "
+            "следующую спокойную тренировку. Новая пробежка всегда <b>private</b>."
+            f"{status}\n\n"
+            f'<a href="{REPOSITORY_URL}">Код и документация Idaten</a>'
         )
         keyboard = _menu_keyboard(linked=True)
     else:
         text = (
             f"Привет, {escape(user.display_name)}!\n\n"
-            "Idaten сохраняет пробежки и считает прогресс. Новая Activity всегда "
-            "<b>private</b>; публикация требует отдельного согласия.\n\n"
-            "Выберите, как добавить первую пробежку."
+            "Idaten сохраняет пробежки, показывает личный прогресс и помогает выбрать "
+            "следующую спокойную тренировку. Новая пробежка всегда <b>private</b>; "
+            "публикация требует отдельного согласия.\n\n"
+            "Добавьте первую пробежку или подключите Health Connect.\n\n"
+            f'<a href="{REPOSITORY_URL}">Код и документация Idaten</a>'
         )
         keyboard = _menu_keyboard(linked=False)
     await message.answer(text, reply_markup=keyboard)
@@ -175,17 +179,7 @@ async def stats(message: Message, services: AppServices) -> None:
     except ActivityInputError as error:
         await message.answer(str(error))
         return
-    await message.answer(format_stats(result, "Статистика за все время"))
-
-
-@router.message(Command("week"))
-async def week(message: Message, services: AppServices) -> None:
-    try:
-        result = await services.coach.week(identity_from_message(message).telegram_user_id)
-    except CoachError as error:
-        await message.answer(str(error))
-        return
-    await message.answer(result.message)
+    await message.answer(format_stats(result))
 
 
 @router.message(Command("next"))
@@ -195,45 +189,7 @@ async def next_workout(message: Message, services: AppServices) -> None:
     except CoachError as error:
         await message.answer(str(error))
         return
-    await message.answer(escape(result.message) if result.provider != "NONE" else result.message)
-
-
-@router.message(Command("plan"))
-async def plan(message: Message, command: CommandObject, services: AppServices) -> None:
-    parts = (command.args or "").split(maxsplit=1)
-    try:
-        goal = TrainingGoal(parts[0].upper())
-    except (IndexError, ValueError):
-        await message.answer("Формат: /plan <FIRST_10K|HALF|MARATHON|CUSTOM> [цель]")
-        return
-    try:
-        result = await services.coach.create_plan(
-            identity_from_message(message).telegram_user_id,
-            goal,
-            custom_goal=parts[1] if len(parts) > 1 else None,
-        )
-    except CoachError as error:
-        await message.answer(str(error))
-        return
     await message.answer(result.message)
-
-
-@router.message(Command("external_processing"))
-async def external_processing(
-    message: Message, command: CommandObject, services: AppServices
-) -> None:
-    value = (command.args or "").strip().lower()
-    if value not in {"on", "off"}:
-        await message.answer("Формат: /external_processing on|off")
-        return
-    try:
-        enabled = await services.coach.set_external_processing(
-            identity_from_message(message).telegram_user_id, enabled=value == "on"
-        )
-    except CoachError as error:
-        await message.answer(str(error))
-        return
-    await message.answer(f"Внешняя обработка: {'включена' if enabled else 'выключена'}.")
 
 
 @router.message(Command("ai_access"))
@@ -276,16 +232,6 @@ async def personal_records(message: Message, services: AppServices) -> None:
         await message.answer(str(error))
         return
     await message.answer(format_personal_records(result))
-
-
-@router.message(Command("imports"))
-async def imports_history(message: Message, services: AppServices) -> None:
-    try:
-        result = await services.imports.history(identity_from_message(message).telegram_user_id)
-    except (ActivityInputError, ImportError) as error:
-        await message.answer(str(error))
-        return
-    await message.answer(format_import_history(result))
 
 
 @router.message(Command("link"))
@@ -384,16 +330,26 @@ async def upload_photo(message: Message, services: AppServices) -> None:
     if draft_id is None:
         await message.answer("Сначала выберите «Добавить пробежку» → «Отправить скриншот».")
         return
-    photo = message.photo[-1]
-    try:
-        services.assisted.validate_declared_image_size(photo.file_size)
-        if message.bot is None:
-            raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
-        buffer = BytesIO()
-        await message.bot.download(photo, destination=buffer)
-        await _finish_assisted_image(message, services, draft_id, buffer.getvalue(), "image/jpeg")
-    except (AssistedError, ActivityInputError, TelegramAPIError) as error:
-        await message.answer(escape(str(error)))
+    async with _assisted_processing(message) as placeholder:
+        photo = message.photo[-1]
+        try:
+            services.assisted.validate_declared_image_size(photo.file_size)
+            if message.bot is None:
+                raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
+            buffer = BytesIO()
+            await message.bot.download(photo, destination=buffer)
+            await _finish_assisted_image(
+                message,
+                placeholder,
+                services,
+                draft_id,
+                buffer.getvalue(),
+                "image/jpeg",
+            )
+        except (AssistedError, ActivityInputError, TelegramAPIError) as error:
+            await _replace_processing_message(
+                message, placeholder, _assisted_failure_message(error)
+            )
 
 
 async def _process_assisted_document(
@@ -402,25 +358,30 @@ async def _process_assisted_document(
     document = message.document
     if document is None:
         return
-    try:
-        services.assisted.validate_declared_image_size(document.file_size)
-        if message.bot is None:
-            raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
-        buffer = BytesIO()
-        await message.bot.download(document, destination=buffer)
-        await _finish_assisted_image(
-            message,
-            services,
-            draft_id,
-            buffer.getvalue(),
-            document.mime_type,
-        )
-    except (AssistedError, ActivityInputError, TelegramAPIError) as error:
-        await message.answer(escape(str(error)))
+    async with _assisted_processing(message) as placeholder:
+        try:
+            services.assisted.validate_declared_image_size(document.file_size)
+            if message.bot is None:
+                raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
+            buffer = BytesIO()
+            await message.bot.download(document, destination=buffer)
+            await _finish_assisted_image(
+                message,
+                placeholder,
+                services,
+                draft_id,
+                buffer.getvalue(),
+                document.mime_type,
+            )
+        except (AssistedError, ActivityInputError, TelegramAPIError) as error:
+            await _replace_processing_message(
+                message, placeholder, _assisted_failure_message(error)
+            )
 
 
 async def _finish_assisted_image(
     message: Message,
+    placeholder: Message,
     services: AppServices,
     draft_id: uuid.UUID,
     content: bytes,
@@ -430,48 +391,54 @@ async def _finish_assisted_image(
         raise AssistedError("Не удалось определить пользователя.", code="USER_NOT_FOUND")
     await services.assisted.extract_image(message.from_user.id, draft_id, content, media_type)
     draft = await services.activities.manual_draft(message.from_user.id, draft_id)
-    master = await message.answer(format_manual_draft(draft), reply_markup=_draft_keyboard(draft))
+    master = await _replace_processing_message(
+        message,
+        placeholder,
+        format_manual_draft(draft),
+        reply_markup=_draft_keyboard(draft),
+    )
     await services.activities.attach_manual_draft_message(
         message.from_user.id, draft.draft_id, master.message_id
     )
 
 
 @router.message(Command("privacy"))
-async def privacy(message: Message, command: CommandObject, services: AppServices) -> None:
+async def privacy(message: Message, services: AppServices) -> None:
     try:
-        argument = (command.args or "").strip().lower()
-        if argument in {"on", "off"}:
-            result = await services.groups.set_privacy(
-                identity_from_message(message).telegram_user_id,
-                enabled=argument == "on",
-            )
-        elif argument:
-            raise GroupError("Формат команды: /privacy [on|off]")
-        else:
-            result = await services.groups.privacy_overview(
-                identity_from_message(message).telegram_user_id
-            )
+        result = await services.groups.privacy_overview(
+            identity_from_message(message).telegram_user_id
+        )
     except (ActivityInputError, GroupError) as error:
         await message.answer(str(error))
         return
-    await message.answer(format_privacy(result))
+    await message.answer(format_privacy(result), reply_markup=_privacy_keyboard(result))
 
 
-@router.message(Command("share"))
-async def share(message: Message, command: CommandObject, services: AppServices) -> None:
-    try:
-        parts = (command.args or "").lower().split()
-        if len(parts) != 2:
-            raise GroupError("Формат команды: /share <chat_id> <none|summary|detailed>")
-        chat_id = int(parts[0])
-        share_level = ShareLevel(parts[1].upper())
-        result = await services.groups.set_share_level(
-            identity_from_message(message).telegram_user_id, chat_id, share_level
-        )
-    except (ActivityInputError, GroupError, ValueError) as error:
-        await message.answer(str(error))
+@router.callback_query(F.data.startswith("priv:"))
+async def privacy_callback(callback: CallbackQuery, services: AppServices) -> None:
+    if callback.data is None or not isinstance(callback.message, Message):
+        await callback.answer("Некорректное действие.", show_alert=True)
         return
-    await message.answer(format_share_level(result.title, result.share_level))
+    try:
+        scope, identifier, action = _parse_privacy_callback(callback.data)
+        if scope == "global":
+            overview = await services.groups.set_privacy(
+                callback.from_user.id, enabled=action == "ON"
+            )
+        else:
+            assert identifier is not None
+            overview = await services.groups.set_group_privacy(
+                callback.from_user.id,
+                identifier,
+                PrivacyGroupAction(action),
+            )
+        await callback.message.edit_text(
+            format_privacy(overview), reply_markup=_privacy_keyboard(overview)
+        )
+    except (GroupError, ValueError) as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    await callback.answer("Настройки сохранены.")
 
 
 @router.callback_query(F.data.startswith("shr:"))
@@ -663,10 +630,6 @@ async def menu_callback(callback: CallbackQuery, services: AppServices) -> None:
             await callback.message.answer(
                 "Как добавить пробежку?", reply_markup=_add_method_keyboard()
             )
-        elif action == "imports":
-            await callback.message.answer(
-                "Отправьте сюда GPX, TCX, FIT, CSV или ZIP с одним поддерживаемым файлом."
-            )
         elif action == "help":
             await callback.message.answer(HELP_TEXT, reply_markup=_help_keyboard())
         elif action == "sync":
@@ -682,10 +645,26 @@ async def menu_callback(callback: CallbackQuery, services: AppServices) -> None:
             )
         elif action == "stats":
             stats = await services.activities.stats(user_id)
-            await callback.message.answer(format_stats(stats, "Статистика за всё время"))
-        elif action == "settings":
+            await callback.message.answer(format_stats(stats))
+        elif action == "next":
+            next_result = await services.coach.next_workout(user_id)
+            await callback.message.answer(next_result.message)
+        elif action == "privacy":
             overview = await services.groups.privacy_overview(user_id)
-            await callback.message.answer(format_privacy(overview))
+            await callback.message.answer(
+                format_privacy(overview), reply_markup=_privacy_keyboard(overview)
+            )
+        elif action == "devices":
+            devices = await services.health_connect.devices_for_user(user_id)
+            active = tuple(device for device in devices if not device.revoked)
+            if not active:
+                await callback.message.answer("Активных подключений Health Connect нет.")
+            else:
+                await callback.message.answer(
+                    "<b>Health Connect подключён</b>\n\n"
+                    + "\n".join(f"• {escape(device.name)}" for device in active)
+                    + "\n\nСинхронизация запускается вручную в Android-приложении."
+                )
         else:
             raise ActivityInputError("Неизвестное действие меню.")
     except (ActivityInputError, AssistedError, HealthConnectError, GroupError) as error:
@@ -706,14 +685,18 @@ async def add_method_callback(callback: CallbackQuery, services: AppServices) ->
             "text": DraftInputMethod.TEXT,
             "screenshot": DraftInputMethod.SCREENSHOT,
         }[method_name]
+    except KeyError:
+        await callback.answer("Некорректное действие.", show_alert=True)
+        return
+    await callback.answer()
+    try:
         if method == DraftInputMethod.STEPS:
             await _start_steps(callback.message, callback, services)
         else:
             await _begin_assisted(callback.message, callback, services, method)
-    except (ActivityInputError, AssistedError, KeyError) as error:
-        await callback.answer(str(error), show_alert=True)
+    except (ActivityInputError, AssistedError) as error:
+        await callback.message.answer(escape(str(error)))
         return
-    await callback.answer()
 
 
 def _identity_from_callback(callback: CallbackQuery) -> TelegramIdentity:
@@ -816,11 +799,11 @@ async def assisted_consent_callback(callback: CallbackQuery, services: AppServic
     except ValueError as error:
         await callback.answer(str(error), show_alert=True)
         return
+    await callback.answer()
     if action == "no":
         await callback.message.edit_text(
             "Внешняя обработка не включена. Вы сможете согласиться при следующей попытке."
         )
-        await callback.answer()
         return
     try:
         request = await services.assisted.accept_consent(_identity_from_callback(callback))
@@ -835,9 +818,8 @@ async def assisted_consent_callback(callback: CallbackQuery, services: AppServic
                 "Согласие сохранено. Запрос доступа отправлен владельцу бота."
             )
     except AssistedError as error:
-        await callback.answer(str(error), show_alert=True)
+        await callback.message.answer(escape(str(error)))
         return
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("aia:"))
@@ -949,17 +931,27 @@ async def manual_draft_reply(message: Message, services: AppServices) -> None:
         if draft.input_method != DraftInputMethod.TEXT:
             await message.answer("Ожидается JPEG или PNG скриншот.")
             return
-        try:
-            await services.assisted.extract_text(message.from_user.id, draft.draft_id, message.text)
-            updated = await services.activities.manual_draft(message.from_user.id, draft.draft_id)
-            master = await message.answer(
-                format_manual_draft(updated), reply_markup=_draft_keyboard(updated)
-            )
-            await services.activities.attach_manual_draft_message(
-                message.from_user.id, updated.draft_id, master.message_id
-            )
-        except (ActivityInputError, AssistedError) as error:
-            await message.answer(escape(str(error)))
+        async with _assisted_processing(message) as placeholder:
+            try:
+                await services.assisted.extract_text(
+                    message.from_user.id, draft.draft_id, message.text
+                )
+                updated = await services.activities.manual_draft(
+                    message.from_user.id, draft.draft_id
+                )
+                master = await _replace_processing_message(
+                    message,
+                    placeholder,
+                    format_manual_draft(updated),
+                    reply_markup=_draft_keyboard(updated),
+                )
+                await services.activities.attach_manual_draft_message(
+                    message.from_user.id, updated.draft_id, master.message_id
+                )
+            except (ActivityInputError, AssistedError) as error:
+                await _replace_processing_message(
+                    message, placeholder, _assisted_failure_message(error)
+                )
         return
     try:
         updated = await services.activities.set_manual_draft_field(
@@ -990,23 +982,104 @@ async def manual_draft_reply(message: Message, services: AppServices) -> None:
         )
 
 
-def _menu_keyboard(*, linked: bool) -> InlineKeyboardMarkup:
-    if linked:
-        rows = [
-            [InlineKeyboardButton(text="🏃 Мои пробежки", callback_data="menu:history")],
-            [InlineKeyboardButton(text="📱 Как синхронизировать", callback_data="menu:sync")],
-            [InlineKeyboardButton(text="➕ Добавить пробежку", callback_data="menu:manual")],
-            [InlineKeyboardButton(text="📊 Статистика", callback_data="menu:stats")],
-            [InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu:settings")],
-            [InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help")],
-        ]
+@asynccontextmanager
+async def _assisted_processing(message: Message) -> AsyncIterator[Message]:
+    placeholder = await message.answer("⏳ <b>Распознаю пробежку…</b>")
+    stop = asyncio.Event()
+    if message.bot is not None:
+        await _send_typing(message)
+        task = asyncio.create_task(_typing_loop(message, stop), name="telegram-assisted-typing")
     else:
-        rows = [
-            [InlineKeyboardButton(text="📱 Подключить Health Connect", callback_data="menu:link")],
-            [InlineKeyboardButton(text="➕ Добавить вручную", callback_data="menu:manual")],
-            [InlineKeyboardButton(text="📄 Импортировать файл", callback_data="menu:imports")],
-            [InlineKeyboardButton(text="❓ Что умеет бот", callback_data="menu:help")],
-        ]
+        task = None
+    try:
+        yield placeholder
+    finally:
+        stop.set()
+        if task is not None:
+            await task
+
+
+async def _send_typing(message: Message) -> None:
+    if message.bot is None:
+        return
+    try:
+        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    except TelegramAPIError:
+        return
+
+
+async def _typing_loop(message: Message, stop: asyncio.Event) -> None:
+    while True:
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=4)
+            return
+        except TimeoutError:
+            await _send_typing(message)
+
+
+async def _replace_processing_message(
+    source: Message,
+    placeholder: Message,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message:
+    try:
+        await placeholder.edit_text(text, reply_markup=reply_markup)
+        return placeholder
+    except TelegramAPIError:
+        return await source.answer(text, reply_markup=reply_markup)
+
+
+def _assisted_failure_message(error: Exception) -> str:
+    if isinstance(error, AssistedError):
+        detail = {
+            "PROVIDER_TIMEOUT": "Сервис не ответил вовремя.",
+            "PROVIDER_FAILED": "Сервис временно недоступен.",
+            "NOT_A_RUN": "На входе не удалось уверенно найти одну пробежку.",
+            "IMAGE_SIZE": "Изображение слишком большое.",
+            "IMAGE_TYPE": "Нужен JPEG или PNG.",
+            "IMAGE_MIME": "Тип файла не совпадает с содержимым.",
+            "IMAGE_PIXELS": "У изображения недопустимое разрешение.",
+            "IMAGE_INVALID": "Файл изображения повреждён.",
+            "DAILY_LIMIT": "Дневной лимит распознаваний исчерпан.",
+            "MONTHLY_LIMIT": "Месячный лимит распознаваний исчерпан.",
+            "ACCESS_REVOKED": "Доступ к распознаванию отозван.",
+        }.get(error.code, "Не удалось обработать данные.")
+    elif isinstance(error, TelegramAPIError):
+        detail = "Не удалось получить изображение из Telegram."
+    else:
+        detail = "Не удалось подготовить черновик."
+    return (
+        "<b>Не удалось распознать пробежку</b>\n\n"
+        f"{detail} Черновик сохранён: исправьте данные или отправьте их ещё раз."
+    )
+
+
+def _menu_keyboard(*, linked: bool) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="🏃 Мои пробежки", callback_data="menu:history")],
+        [InlineKeyboardButton(text="➕ Добавить пробежку", callback_data="menu:manual")],
+        [InlineKeyboardButton(text="📊 Личный прогресс", callback_data="menu:stats")],
+        [InlineKeyboardButton(text="➡️ Следующая тренировка", callback_data="menu:next")],
+        [InlineKeyboardButton(text="🔒 Приватность", callback_data="menu:privacy")],
+    ]
+    if linked:
+        rows.extend(
+            (
+                [InlineKeyboardButton(text="📱 Как синхронизировать", callback_data="menu:sync")],
+                [
+                    InlineKeyboardButton(
+                        text="🔗 Подключённые устройства", callback_data="menu:devices"
+                    )
+                ],
+            )
+        )
+    else:
+        rows.append(
+            [InlineKeyboardButton(text="📱 Подключить Health Connect", callback_data="menu:link")]
+        )
+    rows.append([InlineKeyboardButton(text="❓ Краткая помощь", callback_data="menu:help")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1016,8 +1089,7 @@ def _help_keyboard() -> InlineKeyboardMarkup:
         "activities": "Активности",
         "imports": "Импорт",
         "health": "Health Connect",
-        "privacy": "Privacy и группы",
-        "external": "Внешний wording",
+        "privacy": "Приватность",
     }
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -1025,6 +1097,56 @@ def _help_keyboard() -> InlineKeyboardMarkup:
             for key, label in labels.items()
         ]
     )
+
+
+def _privacy_keyboard(overview: PrivacyOverview) -> InlineKeyboardMarkup:
+    global_action = "OFF" if overview.group_sharing_enabled else "ON"
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=(
+                    "Выключить групповой sharing"
+                    if overview.group_sharing_enabled
+                    else "Включить групповой sharing"
+                ),
+                callback_data=f"priv:g:-:{global_action}",
+            )
+        ]
+    ]
+    for group in overview.groups:
+        group_hex = group.group_id.hex
+        choices = (
+            (PrivacyGroupAction.NONE, "не делиться"),
+            (PrivacyGroupAction.SUMMARY, "кратко"),
+            (PrivacyGroupAction.DETAILED, "подробно"),
+            (PrivacyGroupAction.ALWAYS, "всегда"),
+        )
+        buttons: list[InlineKeyboardButton] = []
+        for action, label in choices:
+            selected = (
+                group.auto_share
+                if action == PrivacyGroupAction.ALWAYS
+                else not group.auto_share and group.share_level.value == action.value
+            )
+            buttons.append(
+                InlineKeyboardButton(
+                    text=f"{'✓ ' if selected else ''}{label}",
+                    callback_data=f"priv:r:{group_hex}:{action.value}",
+                )
+            )
+        rows.append(buttons)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _parse_privacy_callback(value: str) -> tuple[str, uuid.UUID | None, str]:
+    prefix, scope, identifier, action = value.split(":", maxsplit=3)
+    if prefix != "priv":
+        raise ValueError("Некорректное действие.")
+    if scope == "g" and identifier == "-" and action in {"ON", "OFF"}:
+        return "global", None, action
+    if scope == "r" and action in {item.value for item in PrivacyGroupAction}:
+        return "group", uuid.UUID(hex=identifier), action
+    raise ValueError("Некорректное действие приватности.")
 
 
 def _draft_keyboard(draft: ManualDraft) -> InlineKeyboardMarkup:

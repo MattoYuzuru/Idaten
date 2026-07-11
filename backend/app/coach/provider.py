@@ -148,11 +148,14 @@ def allowlisted_payload(
         "all_time_longest_m",
         "average_pace_30d",
         "baseline_weekly_distance_m",
+        "previous_weeks",
+        "recent_history_run_count",
         "classification_counts_30d",
         "risk_flags",
     }
     allowed_recommendation_keys = {
         "rule_version",
+        "recommended_on",
         "workout_type",
         "distance_m",
         "duration_sec",
@@ -160,6 +163,7 @@ def allowlisted_payload(
         "pace_max_sec_per_km",
         "reason",
         "risk_flags",
+        "observations",
     }
     return {
         "facts": {key: facts[key] for key in sorted(allowed_fact_keys) if key in facts},

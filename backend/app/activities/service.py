@@ -24,7 +24,6 @@ from app.activities.schemas import (
     DailyRunGroup,
     ManualDraft,
     ManualRunInput,
-    PersonalRecords,
     PossibleDuplicateError,
     PotentialDuplicate,
     RecordedRun,
@@ -35,6 +34,12 @@ from app.analytics.metrics import (
     calculate_speed_mps,
     format_local_week_period,
     local_week_bounds,
+)
+from app.analytics.personal import (
+    PersonalProgress,
+    PersonalRecords,
+    progress_bounds,
+    select_personal_records,
 )
 from app.coach.report_builder import build_after_run_report
 from app.ingestion.adapters.manual import ManualAdapter
@@ -277,10 +282,13 @@ class ActivityService:
             runs = await ActivityRepository(session).run_history(user.id)
             return group_runs_by_local_date(runs, user.timezone)
 
-    async def stats(self, telegram_user_id: int) -> AggregateStats:
+    async def stats(
+        self, telegram_user_id: int, moment: datetime | None = None
+    ) -> PersonalProgress:
         async with self.session_factory() as session:
             user = await self._require_user(session, telegram_user_id)
-            return await ActivityRepository(session).aggregate(user.id)
+            bounds = progress_bounds(moment or datetime.now(UTC), user.timezone)
+            return await ActivityRepository(session).personal_progress(user.id, bounds)
 
     async def week(self, telegram_user_id: int, moment: datetime | None = None) -> AggregateStats:
         async with self.session_factory() as session:
@@ -293,11 +301,8 @@ class ActivityService:
     async def personal_records(self, telegram_user_id: int) -> PersonalRecords:
         async with self.session_factory() as session:
             user = await self._require_user(session, telegram_user_id)
-            repository = ActivityRepository(session)
-            return PersonalRecords(
-                best_5k=await repository.best_distance(user.id, 5_000),
-                best_10k=await repository.best_distance(user.id, 10_000),
-            )
+            candidates = await ActivityRepository(session).result_candidates(user.id)
+            return select_personal_records(candidates)
 
     async def _record_manual_run(
         self,
