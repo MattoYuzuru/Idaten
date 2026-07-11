@@ -1,16 +1,20 @@
 # ruff: noqa: E501
+from datetime import timedelta
 from html import escape
 from zoneinfo import ZoneInfo
 
 from app.activities.models import DraftInputMethod
 from app.activities.schemas import (
-    ActivitySummary,
-    AggregateStats,
     DailyRunGroup,
     ManualDraft,
-    PersonalRecords,
 )
-from app.analytics.metrics import format_duration
+from app.analytics.metrics import format_duration, format_pace
+from app.analytics.personal import (
+    PersonalProgress,
+    PersonalRecords,
+    ProgressTotals,
+    ResultCandidate,
+)
 from app.groups.models import ShareLevel
 from app.groups.schemas import GroupWeek, LeaderboardEntry, PrivacyOverview, StreakEntry
 from app.ingestion.schemas import ImportHistoryItem, ImportPreview
@@ -60,28 +64,93 @@ Telegram сам не читает Health Connect; sync остаётся foregrou
 }
 
 
-def format_stats(stats: AggregateStats, title: str) -> str:
-    safe_title = escape(title)
-    if stats.run_count == 0:
-        return f"<b>{safe_title}</b>\n\nПробежек пока нет. Добавьте: /run 5 30:00"
+def _format_progress_totals(stats: ProgressTotals) -> str:
+    pace = (
+        "нет данных"
+        if stats.average_pace_sec_per_km is None
+        else f"{format_pace(stats.average_pace_sec_per_km)}/км"
+    )
     return (
-        f"<b>{safe_title}</b>\n\n"
         f"Пробежек: <b>{stats.run_count}</b>\n"
         f"Дистанция: <b>{stats.distance_m / 1000:.2f} км</b>\n"
-        f"Самая длинная: {stats.longest_run_m / 1000:.2f} км"
+        f"Время: {format_duration(stats.elapsed_time_sec)}\n"
+        f"Самая длинная: {stats.longest_run_m / 1000:.2f} км\n"
+        f"Средний темп: {pace}"
     )
 
 
-def _format_record(label: str, record: ActivitySummary | None) -> str:
+def format_stats(stats: PersonalProgress, title: str = "Личный прогресс") -> str:
+    safe_title = escape(title)
+    current = stats.current_week
+    period = f"{current.starts_on:%d.%m}–{(current.ends_on - timedelta(days=1)):%d.%m}"
+    if stats.usual_weekly_distance_m:
+        difference = current.totals.distance_m - stats.usual_weekly_distance_m
+        if difference == 0:
+            comparison = "ровно средний объём предыдущих 4 недель"
+        else:
+            comparison = (
+                f"на {abs(difference) / 1000:.1f} км "
+                f"{'выше' if difference > 0 else 'ниже'} среднего за предыдущие 4 недели"
+            )
+    else:
+        comparison = "пока недостаточно прошлых недель для сравнения"
+    if stats.previous_28_days.distance_m:
+        delta = (
+            (stats.current_28_days.distance_m - stats.previous_28_days.distance_m)
+            * 100
+            / stats.previous_28_days.distance_m
+        )
+        window_comparison = f"Изменение к предыдущим 28 дням: {delta:+.0f}%"
+    else:
+        window_comparison = "Для сравнения с предыдущими 28 днями пока нет данных."
+    maximum = max((week.totals.distance_m for week in stats.weeks), default=0)
+    bars = "▁▂▃▄▅▆▇█"
+    graph = []
+    for week in stats.weeks:
+        level = 0 if maximum == 0 else round(week.totals.distance_m * 7 / maximum)
+        graph.append(
+            f"{week.starts_on:%d.%m} · {bars[level]} · {week.totals.distance_m / 1000:.1f} км"
+        )
+    return (
+        f"<b>{safe_title}</b>\n\n"
+        f"<b>Текущая неделя · {period}</b>\n"
+        f"{_format_progress_totals(current.totals)}\n"
+        f"Сравнение: {comparison}.\n\n"
+        "<b>Последние 28 дней</b>\n"
+        f"{_format_progress_totals(stats.current_28_days)}\n"
+        f"{window_comparison}\n\n"
+        "<b>8 недель</b>\n"
+        + "\n".join(graph)
+        + "\n\n<b>За всё время</b>\n"
+        + _format_progress_totals(stats.all_time)
+    )
+
+
+def _format_record(record: ResultCandidate | None) -> str:
     if record is None:
-        return f"{label}: пока нет подходящей пробежки"
-    return f"{label}: <b>{format_duration(record.elapsed_time_sec)}</b> · {record.distance_m / 1000:.2f} км"
+        return "Фактический результат: пока нет подходящей пробежки"
+    return (
+        f"Фактический результат: <b>{format_duration(record.elapsed_time_sec)}</b> · "
+        f"{record.distance_m / 1000:.2f} км · {record.started_at:%d.%m.%Y} · "
+        f"{format_pace(record.avg_pace_sec_per_km)}/км"
+    )
 
 
 def format_personal_records(records: PersonalRecords) -> str:
-    return "<b>Личные результаты</b>\n\n" + "\n".join(
-        (_format_record("5K", records.best_5k), _format_record("10K", records.best_10k))
-    )
+    lines = ["<b>Результаты и оценки</b>"]
+    for result in records.results:
+        lines.extend((f"\n<b>{result.distance.label}</b>", _format_record(result.actual)))
+        if result.estimate is None:
+            lines.append("Оценка по средней скорости тренировки: нет данных")
+        else:
+            estimate = result.estimate
+            lines.append(
+                "Оценка по средней скорости тренировки: "
+                f"<b>{format_duration(estimate.estimated_duration_sec)}</b> · источник "
+                f"{estimate.source_distance_m / 1000:.2f} км ({estimate.started_at:%d.%m.%Y})"
+            )
+    lines.append("\nОценка не является рекордом на отрезке: для него нужны splits/best efforts.")
+    return "\n".join(lines)
 
 
 def format_manual_draft(draft: ManualDraft) -> str:

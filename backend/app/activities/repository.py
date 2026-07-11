@@ -2,8 +2,9 @@ import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.activities.duplicates import duplicate_tolerance, metrics_match
 from app.activities.models import (
@@ -15,10 +16,16 @@ from app.activities.models import (
     SourceType,
 )
 from app.activities.schemas import (
-    ActivitySummary,
     AggregateStats,
     PotentialDuplicate,
     RunHistoryItem,
+)
+from app.analytics.personal import (
+    PersonalProgress,
+    ProgressBounds,
+    ProgressTotals,
+    ResultCandidate,
+    WeeklyProgress,
 )
 
 
@@ -84,27 +91,72 @@ class ActivityRepository:
             distance_m=int(row[0]), run_count=int(row[1]), longest_run_m=int(row[2])
         )
 
-    async def best_distance(self, user_id: uuid.UUID, target_m: int) -> ActivitySummary | None:
-        statement = (
-            select(Activity)
-            .where(
+    async def result_candidates(self, user_id: uuid.UUID) -> tuple[ResultCandidate, ...]:
+        rows = await self.session.execute(
+            select(
+                Activity.id,
+                Activity.started_at,
+                Activity.distance_m,
+                Activity.elapsed_time_sec,
+                Activity.avg_pace_sec_per_km,
+            ).where(
                 Activity.user_id == user_id,
                 Activity.activity_type == ActivityType.RUN,
                 Activity.deleted_at.is_(None),
-                Activity.distance_m >= target_m,
-                Activity.distance_m <= int(target_m * 1.02),
             )
-            .order_by(Activity.avg_pace_sec_per_km, Activity.elapsed_time_sec)
-            .limit(1)
         )
-        activity = (await self.session.execute(statement)).scalar_one_or_none()
-        if activity is None:
-            return None
-        return ActivitySummary(
-            activity_id=activity.id,
-            distance_m=activity.distance_m,
-            elapsed_time_sec=activity.elapsed_time_sec,
-            avg_pace_sec_per_km=activity.avg_pace_sec_per_km,
+        return tuple(ResultCandidate(*row) for row in rows.tuples())
+
+    async def personal_progress(
+        self, user_id: uuid.UUID, bounds: ProgressBounds
+    ) -> PersonalProgress:
+        windows = (
+            (None, bounds.as_of),
+            (bounds.current_28_start, bounds.as_of),
+            (bounds.previous_28_start, bounds.current_28_start),
+            *((start, min(end, bounds.as_of)) for start, end, _label, _end in bounds.week_bounds),
+        )
+        columns: list[ColumnElement[int]] = []
+        for start, end in windows:
+            condition = Activity.started_at < end
+            if start is not None:
+                condition = condition & (Activity.started_at >= start)
+            columns.extend(
+                (
+                    func.coalesce(func.sum(case((condition, Activity.distance_m), else_=0)), 0),
+                    func.coalesce(func.sum(case((condition, 1), else_=0)), 0),
+                    func.coalesce(func.max(case((condition, Activity.distance_m), else_=0)), 0),
+                    func.coalesce(
+                        func.sum(case((condition, Activity.elapsed_time_sec), else_=0)), 0
+                    ),
+                )
+            )
+        statement = select(*columns).where(
+            Activity.user_id == user_id,
+            Activity.activity_type == ActivityType.RUN,
+            Activity.deleted_at.is_(None),
+        )
+        row = (await self.session.execute(statement)).one()
+        totals = tuple(
+            ProgressTotals(*(int(value) for value in row[index : index + 4]))
+            for index in range(0, len(row), 4)
+        )
+        weeks = tuple(
+            WeeklyProgress(starts_on, ends_on, total)
+            for (*_utc, starts_on, ends_on), total in zip(
+                bounds.week_bounds, totals[3:], strict=True
+            )
+        )
+        completed_baseline = weeks[-5:-1]
+        usual_weekly_distance_m = sum(item.totals.distance_m for item in completed_baseline) // len(
+            completed_baseline
+        )
+        return PersonalProgress(
+            all_time=totals[0],
+            current_28_days=totals[1],
+            previous_28_days=totals[2],
+            weeks=weeks,
+            usual_weekly_distance_m=usual_weekly_distance_m,
         )
 
     async def run_history(
