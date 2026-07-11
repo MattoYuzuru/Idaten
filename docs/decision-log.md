@@ -154,3 +154,35 @@
   Telegram retry не должен создавать N отчетов или повторный summary. Persistent draft
   делает restart/callback retry безопасными и не прячет queryable activity metrics в
   untyped JSON.
+
+## ADR-014 — assisted activity input, consent и ephemeral media
+
+- Дата: 2026-07-11
+- Статус: принято
+- Решение: кнопка добавления пробежки сначала предлагает три функциональных способа:
+  пошаговый ввод, произвольный текст и скриншот. Текст и изображение нормализуются через
+  отдельный доменный контракт `ActivityExtractionProvider`; provider не имеет tools,
+  доступа к БД или истории пользователя и возвращает только strict typed extraction.
+  Активный provider/model выбираются deployment-конфигурацией, а не Telegram-командой.
+- Решение: перед первой передачей raw text/image внешний provider требует отдельного
+  versioned consent. Отказ не создает access request и не уведомляет администратора.
+  После согласия доступ выдается owner-only командой или callback; request идемпотентен,
+  revoke применяется backend до каждого provider call. Секретные команды не публикуются
+  через `setMyCommands`.
+- Решение: изображение проверяется и обрабатывается синхронно в памяти. Оно не пишется в
+  filesystem/БД и не попадает в логи; после provider call сохраняются только SHA-256,
+  provider/model/request metadata и нормализованные typed поля. Очередь и отдельный
+  worker не вводятся. Timeout оставляет черновик готовым к повторной отправке.
+- Решение: persistent activity draft расширяется input method и provenance. Text
+  Activity получает source `TEXT`, screenshot — `SCREENSHOT`; оба источника создаются
+  `PRIVATE` и не становятся group-eligible в этой итерации. Pace/speed, validation,
+  duplicate policy и persistence остаются backend-owned.
+- Решение: fuzzy duplicate contract использует локальную календарную дату и совпадение
+  хотя бы distance или elapsed duration в документированных пределах. Он применяется к
+  manual/text/screenshot preview и повторно внутри confirm transaction. Fuzzy match не
+  перезаписывает существующую Activity и требует явного `save anyway`; exact source/hash
+  identity остается идемпотентной.
+- Причина: интерфейс должен описывать пользовательскую задачу, а не рекламировать AI;
+  один серверный ключ и allowlist подходят закрытой beta, но raw fitness screenshot
+  требует отдельного согласия, ограничений расходов и data minimization. Provider
+  abstraction сохраняет заменяемость OpenAI без преждевременного микросервиса.
