@@ -1,10 +1,13 @@
+import asyncio
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from html import escape
 from io import BytesIO
 
 from aiogram import F, Router
-from aiogram.enums import ChatType
+from aiogram.enums import ChatAction, ChatType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
@@ -327,16 +330,26 @@ async def upload_photo(message: Message, services: AppServices) -> None:
     if draft_id is None:
         await message.answer("Сначала выберите «Добавить пробежку» → «Отправить скриншот».")
         return
-    photo = message.photo[-1]
-    try:
-        services.assisted.validate_declared_image_size(photo.file_size)
-        if message.bot is None:
-            raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
-        buffer = BytesIO()
-        await message.bot.download(photo, destination=buffer)
-        await _finish_assisted_image(message, services, draft_id, buffer.getvalue(), "image/jpeg")
-    except (AssistedError, ActivityInputError, TelegramAPIError) as error:
-        await message.answer(escape(str(error)))
+    async with _assisted_processing(message) as placeholder:
+        photo = message.photo[-1]
+        try:
+            services.assisted.validate_declared_image_size(photo.file_size)
+            if message.bot is None:
+                raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
+            buffer = BytesIO()
+            await message.bot.download(photo, destination=buffer)
+            await _finish_assisted_image(
+                message,
+                placeholder,
+                services,
+                draft_id,
+                buffer.getvalue(),
+                "image/jpeg",
+            )
+        except (AssistedError, ActivityInputError, TelegramAPIError) as error:
+            await _replace_processing_message(
+                message, placeholder, _assisted_failure_message(error)
+            )
 
 
 async def _process_assisted_document(
@@ -345,25 +358,30 @@ async def _process_assisted_document(
     document = message.document
     if document is None:
         return
-    try:
-        services.assisted.validate_declared_image_size(document.file_size)
-        if message.bot is None:
-            raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
-        buffer = BytesIO()
-        await message.bot.download(document, destination=buffer)
-        await _finish_assisted_image(
-            message,
-            services,
-            draft_id,
-            buffer.getvalue(),
-            document.mime_type,
-        )
-    except (AssistedError, ActivityInputError, TelegramAPIError) as error:
-        await message.answer(escape(str(error)))
+    async with _assisted_processing(message) as placeholder:
+        try:
+            services.assisted.validate_declared_image_size(document.file_size)
+            if message.bot is None:
+                raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
+            buffer = BytesIO()
+            await message.bot.download(document, destination=buffer)
+            await _finish_assisted_image(
+                message,
+                placeholder,
+                services,
+                draft_id,
+                buffer.getvalue(),
+                document.mime_type,
+            )
+        except (AssistedError, ActivityInputError, TelegramAPIError) as error:
+            await _replace_processing_message(
+                message, placeholder, _assisted_failure_message(error)
+            )
 
 
 async def _finish_assisted_image(
     message: Message,
+    placeholder: Message,
     services: AppServices,
     draft_id: uuid.UUID,
     content: bytes,
@@ -373,7 +391,12 @@ async def _finish_assisted_image(
         raise AssistedError("Не удалось определить пользователя.", code="USER_NOT_FOUND")
     await services.assisted.extract_image(message.from_user.id, draft_id, content, media_type)
     draft = await services.activities.manual_draft(message.from_user.id, draft_id)
-    master = await message.answer(format_manual_draft(draft), reply_markup=_draft_keyboard(draft))
+    master = await _replace_processing_message(
+        message,
+        placeholder,
+        format_manual_draft(draft),
+        reply_markup=_draft_keyboard(draft),
+    )
     await services.activities.attach_manual_draft_message(
         message.from_user.id, draft.draft_id, master.message_id
     )
@@ -662,14 +685,18 @@ async def add_method_callback(callback: CallbackQuery, services: AppServices) ->
             "text": DraftInputMethod.TEXT,
             "screenshot": DraftInputMethod.SCREENSHOT,
         }[method_name]
+    except KeyError:
+        await callback.answer("Некорректное действие.", show_alert=True)
+        return
+    await callback.answer()
+    try:
         if method == DraftInputMethod.STEPS:
             await _start_steps(callback.message, callback, services)
         else:
             await _begin_assisted(callback.message, callback, services, method)
-    except (ActivityInputError, AssistedError, KeyError) as error:
-        await callback.answer(str(error), show_alert=True)
+    except (ActivityInputError, AssistedError) as error:
+        await callback.message.answer(escape(str(error)))
         return
-    await callback.answer()
 
 
 def _identity_from_callback(callback: CallbackQuery) -> TelegramIdentity:
@@ -772,11 +799,11 @@ async def assisted_consent_callback(callback: CallbackQuery, services: AppServic
     except ValueError as error:
         await callback.answer(str(error), show_alert=True)
         return
+    await callback.answer()
     if action == "no":
         await callback.message.edit_text(
             "Внешняя обработка не включена. Вы сможете согласиться при следующей попытке."
         )
-        await callback.answer()
         return
     try:
         request = await services.assisted.accept_consent(_identity_from_callback(callback))
@@ -791,9 +818,8 @@ async def assisted_consent_callback(callback: CallbackQuery, services: AppServic
                 "Согласие сохранено. Запрос доступа отправлен владельцу бота."
             )
     except AssistedError as error:
-        await callback.answer(str(error), show_alert=True)
+        await callback.message.answer(escape(str(error)))
         return
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("aia:"))
@@ -905,17 +931,27 @@ async def manual_draft_reply(message: Message, services: AppServices) -> None:
         if draft.input_method != DraftInputMethod.TEXT:
             await message.answer("Ожидается JPEG или PNG скриншот.")
             return
-        try:
-            await services.assisted.extract_text(message.from_user.id, draft.draft_id, message.text)
-            updated = await services.activities.manual_draft(message.from_user.id, draft.draft_id)
-            master = await message.answer(
-                format_manual_draft(updated), reply_markup=_draft_keyboard(updated)
-            )
-            await services.activities.attach_manual_draft_message(
-                message.from_user.id, updated.draft_id, master.message_id
-            )
-        except (ActivityInputError, AssistedError) as error:
-            await message.answer(escape(str(error)))
+        async with _assisted_processing(message) as placeholder:
+            try:
+                await services.assisted.extract_text(
+                    message.from_user.id, draft.draft_id, message.text
+                )
+                updated = await services.activities.manual_draft(
+                    message.from_user.id, draft.draft_id
+                )
+                master = await _replace_processing_message(
+                    message,
+                    placeholder,
+                    format_manual_draft(updated),
+                    reply_markup=_draft_keyboard(updated),
+                )
+                await services.activities.attach_manual_draft_message(
+                    message.from_user.id, updated.draft_id, master.message_id
+                )
+            except (ActivityInputError, AssistedError) as error:
+                await _replace_processing_message(
+                    message, placeholder, _assisted_failure_message(error)
+                )
         return
     try:
         updated = await services.activities.set_manual_draft_field(
@@ -944,6 +980,80 @@ async def manual_draft_reply(message: Message, services: AppServices) -> None:
             _draft_prompt("elapsed"),
             reply_markup=ForceReply(input_field_placeholder="45:30", selective=True),
         )
+
+
+@asynccontextmanager
+async def _assisted_processing(message: Message) -> AsyncIterator[Message]:
+    placeholder = await message.answer("⏳ <b>Распознаю пробежку…</b>")
+    stop = asyncio.Event()
+    if message.bot is not None:
+        await _send_typing(message)
+        task = asyncio.create_task(_typing_loop(message, stop), name="telegram-assisted-typing")
+    else:
+        task = None
+    try:
+        yield placeholder
+    finally:
+        stop.set()
+        if task is not None:
+            await task
+
+
+async def _send_typing(message: Message) -> None:
+    if message.bot is None:
+        return
+    try:
+        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    except TelegramAPIError:
+        return
+
+
+async def _typing_loop(message: Message, stop: asyncio.Event) -> None:
+    while True:
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=4)
+            return
+        except TimeoutError:
+            await _send_typing(message)
+
+
+async def _replace_processing_message(
+    source: Message,
+    placeholder: Message,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message:
+    try:
+        await placeholder.edit_text(text, reply_markup=reply_markup)
+        return placeholder
+    except TelegramAPIError:
+        return await source.answer(text, reply_markup=reply_markup)
+
+
+def _assisted_failure_message(error: Exception) -> str:
+    if isinstance(error, AssistedError):
+        detail = {
+            "PROVIDER_TIMEOUT": "Сервис не ответил вовремя.",
+            "PROVIDER_FAILED": "Сервис временно недоступен.",
+            "NOT_A_RUN": "На входе не удалось уверенно найти одну пробежку.",
+            "IMAGE_SIZE": "Изображение слишком большое.",
+            "IMAGE_TYPE": "Нужен JPEG или PNG.",
+            "IMAGE_MIME": "Тип файла не совпадает с содержимым.",
+            "IMAGE_PIXELS": "У изображения недопустимое разрешение.",
+            "IMAGE_INVALID": "Файл изображения повреждён.",
+            "DAILY_LIMIT": "Дневной лимит распознаваний исчерпан.",
+            "MONTHLY_LIMIT": "Месячный лимит распознаваний исчерпан.",
+            "ACCESS_REVOKED": "Доступ к распознаванию отозван.",
+        }.get(error.code, "Не удалось обработать данные.")
+    elif isinstance(error, TelegramAPIError):
+        detail = "Не удалось получить изображение из Telegram."
+    else:
+        detail = "Не удалось подготовить черновик."
+    return (
+        "<b>Не удалось распознать пробежку</b>\n\n"
+        f"{detail} Черновик сохранён: исправьте данные или отправьте их ещё раз."
+    )
 
 
 def _menu_keyboard(*, linked: bool) -> InlineKeyboardMarkup:
