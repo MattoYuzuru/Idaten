@@ -15,7 +15,15 @@ from aiogram.types import (
     Message,
 )
 
-from app.activities.schemas import ActivityInputError, ManualDraft, RecordedRun
+from app.activities.models import DraftInputMethod
+from app.activities.schemas import (
+    ActivityInputError,
+    ManualDraft,
+    PossibleDuplicateError,
+    RecordedRun,
+)
+from app.assisted.models import AssistedAccessStatus
+from app.assisted.schemas import AccessRequestResult, AssistedError, InputGateStatus
 from app.bot.messages import (
     HELP_SECTIONS,
     HELP_TEXT,
@@ -104,27 +112,26 @@ async def help_command(message: Message) -> None:
 @router.message(Command("run"))
 async def run(message: Message, command: CommandObject, services: AppServices) -> None:
     if not command.args:
-        identity = identity_from_message(message)
-        try:
-            draft = await services.activities.start_manual_draft(identity)
-        except ActivityInputError as error:
+        await message.answer("Как добавить пробежку?", reply_markup=_add_method_keyboard())
+        return
+    try:
+        result = await services.activities.record_manual_command(
+            identity_from_message(message), command.args, datetime.now(UTC)
+        )
+    except PossibleDuplicateError as error:
+        if error.run is None:
             await message.answer(escape(str(error)))
             return
+        identity = identity_from_message(message)
+        draft = await services.activities.start_manual_draft(identity, prefill=error.run)
+        await message.answer("Похоже, такая пробежка уже сохранена. Проверьте данные.")
         master = await message.answer(
             format_manual_draft(draft), reply_markup=_draft_keyboard(draft)
         )
         await services.activities.attach_manual_draft_message(
             identity.telegram_user_id, draft.draft_id, master.message_id
         )
-        await message.answer(
-            "Введите дистанцию в километрах, например 10.02",
-            reply_markup=ForceReply(input_field_placeholder="10.02", selective=True),
-        )
         return
-    try:
-        result = await services.activities.record_manual_command(
-            identity_from_message(message), command.args, datetime.now(UTC)
-        )
     except ActivityInputError as error:
         await message.answer(escape(str(error)))
         return
@@ -229,6 +236,36 @@ async def external_processing(
     await message.answer(f"Внешняя обработка: {'включена' if enabled else 'выключена'}.")
 
 
+@router.message(Command("ai_access"))
+async def ai_access(message: Message, command: CommandObject, services: AppServices) -> None:
+    parts = (command.args or "").split()
+    if len(parts) != 2 or parts[0] not in {"grant", "revoke", "status"}:
+        await message.answer("Формат: /ai_access grant|revoke|status <telegram_id>")
+        return
+    try:
+        actor_id = identity_from_message(message).telegram_user_id
+        _require_assisted_owner(services, actor_id)
+        target_id = int(parts[1])
+        if parts[0] == "status":
+            overview = await services.assisted.access_overview(actor_id, target_id)
+        else:
+            overview = await services.assisted.decide_access(
+                actor_id,
+                target_id,
+                allow=parts[0] == "grant",
+            )
+    except (AssistedError, ValueError) as error:
+        await message.answer(escape(str(error)))
+        return
+    status = overview.status.value if overview.status else "NOT_REQUESTED"
+    await message.answer(
+        f"User <code>{overview.telegram_user_id}</code>: {status}; "
+        f"consent={'yes' if overview.consent_current else 'no'}"
+    )
+    if parts[0] == "grant" and message.bot is not None:
+        await message.bot.send_message(target_id, "Доступ к вводу текстом и скриншотом открыт.")
+
+
 @router.message(Command("pr"))
 async def personal_records(message: Message, services: AppServices) -> None:
     try:
@@ -310,6 +347,13 @@ async def upload_document(message: Message, services: AppServices) -> None:
     document = message.document
     if document is None:
         return
+    if message.from_user is not None:
+        pending = await services.assisted.pending_input(
+            message.from_user.id, DraftInputMethod.SCREENSHOT
+        )
+        if pending is not None:
+            await _process_assisted_document(message, services, pending)
+            return
     bot = message.bot
     if bot is None:
         await message.answer("Telegram bot недоступен.")
@@ -328,6 +372,68 @@ async def upload_document(message: Message, services: AppServices) -> None:
         await message.answer(str(error))
         return
     await message.answer(format_import_preview(preview), reply_markup=_import_keyboard(preview))
+
+
+@router.message(F.photo)
+async def upload_photo(message: Message, services: AppServices) -> None:
+    if message.from_user is None or not message.photo:
+        return
+    draft_id = await services.assisted.pending_input(
+        message.from_user.id, DraftInputMethod.SCREENSHOT
+    )
+    if draft_id is None:
+        await message.answer("Сначала выберите «Добавить пробежку» → «Отправить скриншот».")
+        return
+    photo = message.photo[-1]
+    try:
+        services.assisted.validate_declared_image_size(photo.file_size)
+        if message.bot is None:
+            raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
+        buffer = BytesIO()
+        await message.bot.download(photo, destination=buffer)
+        await _finish_assisted_image(message, services, draft_id, buffer.getvalue(), "image/jpeg")
+    except (AssistedError, ActivityInputError, TelegramAPIError) as error:
+        await message.answer(escape(str(error)))
+
+
+async def _process_assisted_document(
+    message: Message, services: AppServices, draft_id: uuid.UUID
+) -> None:
+    document = message.document
+    if document is None:
+        return
+    try:
+        services.assisted.validate_declared_image_size(document.file_size)
+        if message.bot is None:
+            raise AssistedError("Telegram bot недоступен.", code="BOT_UNAVAILABLE")
+        buffer = BytesIO()
+        await message.bot.download(document, destination=buffer)
+        await _finish_assisted_image(
+            message,
+            services,
+            draft_id,
+            buffer.getvalue(),
+            document.mime_type,
+        )
+    except (AssistedError, ActivityInputError, TelegramAPIError) as error:
+        await message.answer(escape(str(error)))
+
+
+async def _finish_assisted_image(
+    message: Message,
+    services: AppServices,
+    draft_id: uuid.UUID,
+    content: bytes,
+    media_type: str | None,
+) -> None:
+    if message.from_user is None:
+        raise AssistedError("Не удалось определить пользователя.", code="USER_NOT_FOUND")
+    await services.assisted.extract_image(message.from_user.id, draft_id, content, media_type)
+    draft = await services.activities.manual_draft(message.from_user.id, draft_id)
+    master = await message.answer(format_manual_draft(draft), reply_markup=_draft_keyboard(draft))
+    await services.activities.attach_manual_draft_message(
+        message.from_user.id, draft.draft_id, master.message_id
+    )
 
 
 @router.message(Command("privacy"))
@@ -554,24 +660,8 @@ async def menu_callback(callback: CallbackQuery, services: AppServices) -> None:
                 "4. Загрузите последние пробежки и явно нажмите «Синхронизировать»."
             )
         elif action == "manual":
-            draft = await services.activities.start_manual_draft(
-                TelegramIdentity(
-                    telegram_user_id=user_id,
-                    private_chat_id=callback.message.chat.id,
-                    username=callback.from_user.username,
-                    first_name=callback.from_user.first_name,
-                    last_name=callback.from_user.last_name,
-                )
-            )
-            master = await callback.message.answer(
-                format_manual_draft(draft), reply_markup=_draft_keyboard(draft)
-            )
-            await services.activities.attach_manual_draft_message(
-                user_id, draft.draft_id, master.message_id
-            )
             await callback.message.answer(
-                "Введите дистанцию в километрах, например 10.02",
-                reply_markup=ForceReply(input_field_placeholder="10.02", selective=True),
+                "Как добавить пробежку?", reply_markup=_add_method_keyboard()
             )
         elif action == "imports":
             await callback.message.answer(
@@ -598,10 +688,180 @@ async def menu_callback(callback: CallbackQuery, services: AppServices) -> None:
             await callback.message.answer(format_privacy(overview))
         else:
             raise ActivityInputError("Неизвестное действие меню.")
-    except (ActivityInputError, HealthConnectError, GroupError) as error:
+    except (ActivityInputError, AssistedError, HealthConnectError, GroupError) as error:
         await callback.answer(str(error), show_alert=True)
         return
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("add:"))
+async def add_method_callback(callback: CallbackQuery, services: AppServices) -> None:
+    if callback.data is None or not isinstance(callback.message, Message):
+        await callback.answer("Некорректное действие.", show_alert=True)
+        return
+    method_name = callback.data.partition(":")[2]
+    try:
+        method = {
+            "steps": DraftInputMethod.STEPS,
+            "text": DraftInputMethod.TEXT,
+            "screenshot": DraftInputMethod.SCREENSHOT,
+        }[method_name]
+        if method == DraftInputMethod.STEPS:
+            await _start_steps(callback.message, callback, services)
+        else:
+            await _begin_assisted(callback.message, callback, services, method)
+    except (ActivityInputError, AssistedError, KeyError) as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    await callback.answer()
+
+
+def _identity_from_callback(callback: CallbackQuery) -> TelegramIdentity:
+    if not isinstance(callback.message, Message):
+        raise AssistedError("Сообщение недоступно.", code="MESSAGE_UNAVAILABLE")
+    return TelegramIdentity(
+        telegram_user_id=callback.from_user.id,
+        private_chat_id=callback.message.chat.id,
+        username=callback.from_user.username,
+        first_name=callback.from_user.first_name,
+        last_name=callback.from_user.last_name,
+    )
+
+
+async def _start_steps(message: Message, callback: CallbackQuery, services: AppServices) -> None:
+    identity = _identity_from_callback(callback)
+    draft = await services.activities.start_manual_draft(identity)
+    master = await message.answer(format_manual_draft(draft), reply_markup=_draft_keyboard(draft))
+    await services.activities.attach_manual_draft_message(
+        identity.telegram_user_id, draft.draft_id, master.message_id
+    )
+    await message.answer(
+        "Введите дистанцию в километрах, например 10.02",
+        reply_markup=ForceReply(input_field_placeholder="10.02", selective=True),
+    )
+
+
+async def _begin_assisted(
+    message: Message,
+    callback: CallbackQuery,
+    services: AppServices,
+    method: DraftInputMethod,
+) -> None:
+    identity = _identity_from_callback(callback)
+    gate = await services.assisted.gate(identity, method)
+    if gate.status == InputGateStatus.CONSENT_REQUIRED:
+        label = "текст" if method == DraftInputMethod.TEXT else "изображение"
+        await message.answer(
+            "Для распознавания Idaten передаст внешний provider только текущие "
+            f"{label} и timezone. Данные профиля, история, GPS и Telegram identity "
+            "не передаются. Исходное содержимое не сохраняется на VPS.",
+            reply_markup=_consent_keyboard(method),
+        )
+        return
+    if gate.status == InputGateStatus.ACCESS_REVOKED:
+        raise AssistedError("Доступ к этой функции отозван.", code="ACCESS_REVOKED")
+    if gate.status == InputGateStatus.DISABLED:
+        raise AssistedError("Этот способ ввода сейчас недоступен.", code="PROVIDER_DISABLED")
+    if gate.status == InputGateStatus.ACCESS_PENDING:
+        request = await services.assisted.accept_consent(identity)
+        if request.notify_owner:
+            await _notify_access_owner(callback, services, request)
+        await message.answer("Запрос доступа отправлен владельцу бота.")
+        return
+    await _start_assisted_prompt(message, identity.telegram_user_id, services, method)
+
+
+async def _start_assisted_prompt(
+    message: Message,
+    telegram_user_id: int,
+    services: AppServices,
+    method: DraftInputMethod,
+) -> None:
+    await services.assisted.start_draft(telegram_user_id, method)
+    if method == DraftInputMethod.TEXT:
+        await message.answer(
+            "Опишите одну пробежку одним сообщением. Например: «7 июля пробежал "
+            "8,4 км за 47:20, средний пульс 151»."
+        )
+    else:
+        await message.answer("Отправьте один JPEG или PNG скриншот пробежки.")
+
+
+async def _notify_access_owner(
+    callback: CallbackQuery,
+    services: AppServices,
+    request: AccessRequestResult,
+) -> None:
+    owner_chat_id = services.assisted.owner_chat_id
+    if owner_chat_id is None or callback.bot is None:
+        return
+    username = f"@{escape(request.username)}" if request.username else "без username"
+    await callback.bot.send_message(
+        owner_chat_id,
+        "<b>Запрошен доступ к распознаванию тренировок</b>\n\n"
+        f"{escape(request.display_name)} · {username}\n"
+        f"Telegram ID: <code>{request.telegram_user_id}</code>",
+        reply_markup=_access_keyboard(request.telegram_user_id),
+    )
+    await services.assisted.mark_notification_sent(request.telegram_user_id)
+
+
+@router.callback_query(F.data.startswith("assist:consent:"))
+async def assisted_consent_callback(callback: CallbackQuery, services: AppServices) -> None:
+    if callback.data is None or not isinstance(callback.message, Message):
+        await callback.answer("Некорректное действие.", show_alert=True)
+        return
+    try:
+        action, method = _parse_assisted_consent_callback(callback.data)
+    except ValueError as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    if action == "no":
+        await callback.message.edit_text(
+            "Внешняя обработка не включена. Вы сможете согласиться при следующей попытке."
+        )
+        await callback.answer()
+        return
+    try:
+        request = await services.assisted.accept_consent(_identity_from_callback(callback))
+        if request.notify_owner:
+            await _notify_access_owner(callback, services, request)
+        if request.status == AssistedAccessStatus.ALLOWED:
+            await _start_assisted_prompt(callback.message, callback.from_user.id, services, method)
+        elif request.status == AssistedAccessStatus.REVOKED:
+            await callback.message.edit_text("Доступ к этой функции отозван владельцем бота.")
+        else:
+            await callback.message.edit_text(
+                "Согласие сохранено. Запрос доступа отправлен владельцу бота."
+            )
+    except AssistedError as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("aia:"))
+async def assisted_admin_callback(callback: CallbackQuery, services: AppServices) -> None:
+    if callback.data is None:
+        await callback.answer("Некорректное действие.", show_alert=True)
+        return
+    try:
+        _prefix, action, target = callback.data.split(":")
+        if action not in {"grant", "revoke"}:
+            raise ValueError("Некорректное действие.")
+        target_id = int(target)
+        _require_assisted_owner(services, callback.from_user.id)
+        overview = await services.assisted.decide_access(
+            callback.from_user.id, target_id, allow=action == "grant"
+        )
+        if callback.bot is not None and overview.status == AssistedAccessStatus.ALLOWED:
+            await callback.bot.send_message(
+                target_id, "Доступ к вводу текстом и скриншотом открыт."
+            )
+    except (AssistedError, ValueError) as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    await callback.answer(f"Статус: {overview.status.value if overview.status else 'NONE'}")
 
 
 @router.callback_query(F.data.startswith("hist:"))
@@ -623,23 +883,26 @@ async def history_callback(callback: CallbackQuery, services: AppServices) -> No
 
 @router.callback_query(F.data.startswith("md:"))
 async def manual_draft_callback(callback: CallbackQuery, services: AppServices) -> None:
-    if callback.data is None or callback.message is None:
+    if callback.data is None or not isinstance(callback.message, Message):
         await callback.answer("Некорректный callback.", show_alert=True)
         return
+    message = callback.message
     try:
         _, action, draft_hex, *field_parts = callback.data.split(":")
         draft_id = uuid.UUID(hex=draft_hex)
-        if not isinstance(callback.message, Message):
-            raise ActivityInputError("Сообщение мастера больше недоступно.")
         if action == "cancel":
             draft = await services.activities.cancel_manual_draft(callback.from_user.id, draft_id)
-            await callback.message.edit_text("Добавление пробежки отменено.")
-        elif action == "save":
-            result = await services.activities.confirm_manual_draft(callback.from_user.id, draft_id)
-            await callback.message.edit_text("✅ Пробежка сохранена private.")
+            await message.edit_text("Добавление пробежки отменено.")
+        elif action in {"save", "force"}:
+            result = await services.activities.confirm_manual_draft(
+                callback.from_user.id,
+                draft_id,
+                accept_possible_duplicate=action == "force",
+            )
+            await message.edit_text("✅ Пробежка сохранена private.")
             if result.created:
                 await _send_run_result(
-                    callback.message,
+                    message,
                     services,
                     result,
                     telegram_user_id=callback.from_user.id,
@@ -649,17 +912,22 @@ async def manual_draft_callback(callback: CallbackQuery, services: AppServices) 
             draft = await services.activities.choose_manual_draft_field(
                 callback.from_user.id, draft_id, field
             )
-            await callback.message.answer(
+            await message.answer(
                 _draft_prompt(field),
                 reply_markup=ForceReply(
                     input_field_placeholder=_draft_placeholder(field), selective=True
                 ),
             )
-            await callback.message.edit_text(
-                format_manual_draft(draft), reply_markup=_draft_keyboard(draft)
-            )
+            await message.edit_text(format_manual_draft(draft), reply_markup=_draft_keyboard(draft))
         else:
             raise ActivityInputError("Неизвестное действие черновика.")
+    except PossibleDuplicateError as error:
+        refreshed = await services.activities.manual_draft(callback.from_user.id, draft_id)
+        await message.edit_text(
+            format_manual_draft(refreshed), reply_markup=_draft_keyboard(refreshed)
+        )
+        await callback.answer(str(error), show_alert=True)
+        return
     except (ActivityInputError, ValueError) as error:
         await callback.answer(str(error), show_alert=True)
         return
@@ -677,6 +945,22 @@ async def manual_draft_reply(message: Message, services: AppServices) -> None:
     if pending is None:
         return
     draft, field = pending
+    if field == "assisted_input":
+        if draft.input_method != DraftInputMethod.TEXT:
+            await message.answer("Ожидается JPEG или PNG скриншот.")
+            return
+        try:
+            await services.assisted.extract_text(message.from_user.id, draft.draft_id, message.text)
+            updated = await services.activities.manual_draft(message.from_user.id, draft.draft_id)
+            master = await message.answer(
+                format_manual_draft(updated), reply_markup=_draft_keyboard(updated)
+            )
+            await services.activities.attach_manual_draft_message(
+                message.from_user.id, updated.draft_id, master.message_id
+            )
+        except (ActivityInputError, AssistedError) as error:
+            await message.answer(escape(str(error)))
+        return
     try:
         updated = await services.activities.set_manual_draft_field(
             message.from_user.id, draft.draft_id, field, message.text
@@ -767,15 +1051,87 @@ def _draft_keyboard(draft: ManualDraft) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="Название", callback_data=f"md:field:{draft_hex}:title"),
         ],
         [
-            InlineKeyboardButton(text="✅ Сохранить", callback_data=f"md:save:{draft_hex}"),
+            InlineKeyboardButton(
+                text=("Сохранить всё равно" if draft.duplicate_candidates else "✅ Сохранить"),
+                callback_data=(
+                    f"md:force:{draft_hex}"
+                    if draft.duplicate_candidates
+                    else f"md:save:{draft_hex}"
+                ),
+            ),
             InlineKeyboardButton(text="Отмена", callback_data=f"md:cancel:{draft_hex}"),
         ],
     ]
     if not draft.complete:
+        if not draft.date_confirmed:
+            required_field = "date"
+        elif not draft.run.distance_m:
+            required_field = "distance"
+        else:
+            required_field = "elapsed"
         rows[-1][0] = InlineKeyboardButton(
-            text="Сначала дистанция и время", callback_data=f"md:field:{draft_hex}:distance"
+            text="Заполните обязательные поля",
+            callback_data=f"md:field:{draft_hex}:{required_field}",
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _add_method_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Ввести по шагам", callback_data="add:steps")],
+            [InlineKeyboardButton(text="Описать текстом", callback_data="add:text")],
+            [InlineKeyboardButton(text="Отправить скриншот", callback_data="add:screenshot")],
+        ]
+    )
+
+
+def _consent_keyboard(method: DraftInputMethod) -> InlineKeyboardMarkup:
+    value = "text" if method == DraftInputMethod.TEXT else "screenshot"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Согласен", callback_data=f"assist:consent:yes:{value}"),
+                InlineKeyboardButton(
+                    text="Не согласен", callback_data=f"assist:consent:no:{value}"
+                ),
+            ]
+        ]
+    )
+
+
+def _parse_assisted_consent_callback(value: str) -> tuple[str, DraftInputMethod]:
+    try:
+        prefix, consent, action, method_name = value.split(":")
+        method = {
+            "text": DraftInputMethod.TEXT,
+            "screenshot": DraftInputMethod.SCREENSHOT,
+        }[method_name]
+    except (KeyError, ValueError) as error:
+        raise ValueError("Некорректное действие согласия.") from error
+    if prefix != "assist" or consent != "consent" or action not in {"yes", "no"}:
+        raise ValueError("Некорректное действие согласия.")
+    return action, method
+
+
+def _require_assisted_owner(services: AppServices, telegram_user_id: int) -> None:
+    if services.assisted.owner_chat_id != telegram_user_id:
+        raise AssistedError("Команда доступна только владельцу.", code="OWNER_REQUIRED")
+
+
+def _access_keyboard(telegram_user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Разрешить", callback_data=f"aia:grant:{telegram_user_id}"
+                ),
+                InlineKeyboardButton(
+                    text="Отклонить", callback_data=f"aia:revoke:{telegram_user_id}"
+                ),
+            ]
+        ]
+    )
 
 
 def _history_keyboard(

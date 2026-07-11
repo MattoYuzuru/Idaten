@@ -129,11 +129,21 @@ Policy применяется также к manual wizard и slash `/run`; direc
 
 ## Checklist
 
-- [ ] ADR и migration design реализованы.
-- [ ] Consent/access/admin flow покрыт тестами.
-- [ ] Common duplicate contract подключен к manual и assisted flows.
-- [ ] OpenAI text/image provider и strict parsing реализованы.
-- [ ] Ephemeral media и usage limits проверены.
-- [ ] Telegram method selector, preview/edit/confirm реализованы.
-- [ ] Privacy/source negative tests проходят.
+- [x] ADR и migration design реализованы.
+- [x] Consent/access/admin flow покрыт тестами.
+- [x] Common duplicate contract подключен к manual и assisted flows.
+- [x] OpenAI text/image provider и strict parsing реализованы.
+- [x] Ephemeral media и usage limits проверены.
+- [x] Telegram method selector, preview/edit/confirm реализованы.
+- [x] Privacy/source negative tests проходят.
 - [ ] Full local/CI/release gates пройдены.
+
+## Known limitations перед release
+
+- Live OpenAI smoke и Samsung Health screenshot eval требуют owner-controlled key/input;
+  они не выполнялись на локальных или пользовательских данных из workspace.
+- Локальная Docker-сборка заблокирована TLS interception цепочкой workstation для PyPI.
+  Runtime smoke текущего source/migration прошел в контейнере с уже собранным dependency
+  layer; чистую image build обязан подтвердить GitHub CI.
+- Release signing credentials не экспортированы локально, поэтому signed Android
+  `assembleRelease` и `apksigner verify` остаются CI gate.
