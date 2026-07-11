@@ -195,7 +195,7 @@ async def next_workout(message: Message, services: AppServices) -> None:
     except CoachError as error:
         await message.answer(str(error))
         return
-    await message.answer(escape(result.message) if result.provider != "NONE" else result.message)
+    await message.answer(result.message)
 
 
 @router.message(Command("plan"))

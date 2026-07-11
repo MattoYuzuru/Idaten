@@ -75,7 +75,9 @@ async def add_history(services: AppServices, count: int = 4) -> None:
         await services.activities.record_manual_run(
             identity(),
             ManualRunInput(
-                5_000 + index * 500, 1_800 + index * 180, NOW - timedelta(days=index * 8)
+                5_000 + index * 500,
+                1_800 + index * 180,
+                NOW - timedelta(days=index * 8) - timedelta(hours=2),
             ),
         )
 
@@ -89,8 +91,11 @@ async def test_next_without_history_is_safe_and_persists_versions(
     result = await services.coach.next_workout(42, NOW)
 
     assert result.recommendation.distance_m == 3_000
-    assert "Недостаточно истории" in result.recommendation.reason
+    assert "истории пока мало" in result.recommendation.reason
     assert result.provider == "NONE"
+    assert result.recommendation.recommended_on == NOW.date() + timedelta(days=1)
+    assert "не раньше" in result.message
+    assert "Что учтено" in result.message
     async with session_factory() as session:
         report = await session.get(CoachReport, result.report_id)
         assert report is not None
@@ -135,6 +140,23 @@ async def test_next_with_history_and_safe_plan_progression(
 
 
 @pytest.mark.asyncio
+async def test_backfilled_run_does_not_replace_latest_completed_workout(
+    coach_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, _session_factory = coach_context
+    latest = NOW - timedelta(days=1)
+    await services.activities.record_manual_run(identity(), ManualRunInput(5_000, 1_800, latest))
+    await services.activities.record_manual_run(
+        identity(), ManualRunInput(10_000, 3_600, NOW - timedelta(days=90))
+    )
+
+    result = await services.coach.next_workout(42, NOW)
+
+    assert result.facts.last_completed_local_date == latest.date()
+    assert result.recommendation.recommended_on == NOW.date()
+
+
+@pytest.mark.asyncio
 async def test_template_fallback_without_api_key(
     coach_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
 ) -> None:
@@ -163,6 +185,8 @@ async def test_external_processing_requires_opt_in_and_payload_is_allowlisted(
     assert first.provider == "NONE"
     assert provider.calls == 1
     assert second.provider == "OPENAI"
+    assert "Дистанция:" in second.message
+    assert "Комментарий" in second.message
     payload = json.dumps(provider.payloads[0], sort_keys=True).lower()
     for forbidden in (
         "route",

@@ -26,7 +26,7 @@ def run(
     title: str | None = None,
 ) -> RunFact:
     return RunFact(
-        NOW - timedelta(days=days_ago),
+        NOW - timedelta(days=days_ago, hours=4),
         distance_m,
         distance_m * pace // 1000,
         pace,
@@ -86,7 +86,9 @@ def test_facts_and_recommendation_are_deterministic_and_versioned() -> None:
 
     assert first == second
     assert first.as_json() == second.as_json()
-    assert recommend_next(first) == recommend_next(second)
+    assert recommend_next(first, as_of=NOW, timezone="UTC") == recommend_next(
+        second, as_of=NOW, timezone="UTC"
+    )
     assert first.calculator_version == CALCULATOR_VERSION
     assert first.rule_version == RULE_VERSION
     assert first.average_pace_30d == 360
@@ -103,7 +105,7 @@ def test_volume_and_long_run_spike_exact_boundaries() -> None:
     )
     facts = calculate_facts(samples, as_of=NOW, timezone="UTC")
 
-    assert facts.baseline_weekly_distance_m == 10_000
+    assert facts.baseline_weekly_distance_m == 7_500
     assert RiskFlag.VOLUME_SPIKE.value in facts.risk_flags
     assert RiskFlag.LONG_RUN_SPIKE.value in facts.risk_flags
 
@@ -123,7 +125,48 @@ def test_missing_and_low_quality_data_flags() -> None:
         RiskFlag.MISSING_HISTORY.value,
         RiskFlag.LOW_QUALITY_DATA.value,
     )
-    assert recommend_next(facts).workout_type == RunClassification.EASY
+    assert recommend_next(facts, as_of=NOW, timezone="UTC").workout_type == (RunClassification.EASY)
+
+
+def test_two_prior_weeks_define_baseline_and_old_backfill_is_not_latest() -> None:
+    recent = (run(1, 6_000), run(8, 8_000), run(15, 12_000))
+    backfilled = run(90, 30_000)
+
+    facts = calculate_facts(
+        (recent[0], backfilled, recent[2], recent[1]), as_of=NOW, timezone="UTC"
+    )
+    recommendation = recommend_next(facts, as_of=NOW, timezone="UTC")
+
+    assert [week.distance_m for week in facts.previous_weeks] == [12_000, 8_000]
+    assert facts.baseline_weekly_distance_m == 10_000
+    assert facts.last_completed_local_date == recent[0].started_at.date()
+    assert recommendation.recommended_on == recent[0].started_at.date() + timedelta(days=1)
+
+
+def test_sparse_recent_history_stays_conservative_despite_old_runs() -> None:
+    old_history = tuple(run(60 + index, 10_000) for index in range(10))
+    facts = calculate_facts((*old_history, run(1, 5_000)), as_of=NOW, timezone="UTC")
+
+    recommendation = recommend_next(facts, as_of=NOW, timezone="UTC")
+
+    assert RiskFlag.MISSING_HISTORY.value in facts.risk_flags
+    assert recommendation.distance_m == 3_000
+    assert any("мало данных" in item for item in recommendation.observations)
+
+
+def test_recovery_recommendation_has_date_and_readable_observations() -> None:
+    samples = (
+        run(0, 13_000),
+        run(8, 7_500),
+        run(15, 7_500),
+    )
+    facts = calculate_facts(samples, as_of=NOW, timezone="UTC")
+
+    recommendation = recommend_next(facts, as_of=NOW, timezone="UTC")
+
+    assert recommendation.workout_type == RunClassification.RECOVERY
+    assert recommendation.recommended_on == NOW.date() + timedelta(days=2)
+    assert any("объём" in item for item in recommendation.observations)
 
 
 def test_plan_targets_never_grow_more_than_ten_percent() -> None:
