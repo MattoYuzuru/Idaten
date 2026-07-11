@@ -1,5 +1,6 @@
 import uuid
 from dataclasses import dataclass
+from enum import StrEnum
 
 from app.groups.models import GroupRole, ShareLevel
 
@@ -8,8 +9,16 @@ class GroupError(ValueError):
     pass
 
 
+class PrivacyGroupAction(StrEnum):
+    NONE = "NONE"
+    SUMMARY = "SUMMARY"
+    DETAILED = "DETAILED"
+    ALWAYS = "ALWAYS"
+
+
 @dataclass(frozen=True, slots=True)
 class GroupInfo:
+    group_id: uuid.UUID
     telegram_chat_id: int
     title: str
     timezone: str

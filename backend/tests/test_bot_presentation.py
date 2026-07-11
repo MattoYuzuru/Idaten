@@ -10,42 +10,46 @@ from app.assisted.schemas import AssistedError
 from app.bot.handlers import (
     _add_method_keyboard,
     _draft_keyboard,
+    _menu_keyboard,
     _parse_assisted_consent_callback,
+    _parse_privacy_callback,
+    _privacy_keyboard,
     _require_assisted_owner,
 )
-from app.bot.messages import HELP_SECTIONS, format_manual_draft
+from app.bot.messages import HELP_SECTIONS, REPOSITORY_URL, format_manual_draft, format_privacy
+from app.bot.runtime import PRIVATE_BOT_COMMANDS
 from app.core.config import Settings
+from app.groups.models import GroupRole, ShareLevel
+from app.groups.schemas import GroupInfo, PrivacyOverview
 from app.services import build_services
 
 
-def test_help_documents_every_release_command() -> None:
+def test_private_commands_help_and_menu_hide_internal_paths() -> None:
     help_text = "\n".join(HELP_SECTIONS.values())
-    commands = {
+    commands = {command.command for command in PRIVATE_BOT_COMMANDS}
+    assert commands == {
         "start",
         "menu",
-        "help",
         "run",
         "stats",
-        "week",
         "pr",
         "next",
-        "plan",
-        "imports",
+        "privacy",
         "link",
         "devices",
         "revoke_device",
-        "privacy",
-        "share",
-        "setup_group",
-        "join",
-        "leave",
-        "month",
-        "group_goal",
-        "leaderboard",
-        "streaks",
-        "external_processing",
+        "help",
     }
-    assert all(f"/{command}" in help_text for command in commands)
+    removed = {"plan", "external_processing", "share", "imports", "week", "ai_access"}
+    callbacks = {
+        button.callback_data
+        for linked in (False, True)
+        for row in _menu_keyboard(linked=linked).inline_keyboard
+        for button in row
+    }
+    assert all(f"/{command}" not in help_text for command in removed)
+    assert all(not any(command in (value or "") for command in removed) for value in callbacks)
+    assert REPOSITORY_URL == "https://github.com/MattoYuzuru/Idaten"
 
 
 def test_manual_preview_escapes_title_and_callbacks_contain_only_opaque_id() -> None:
@@ -125,6 +129,40 @@ def test_consent_callback_parser_rejects_forged_actions() -> None:
         _parse_assisted_consent_callback("assist:consent:grant:text")
     with pytest.raises(ValueError, match="Некорректное"):
         _parse_assisted_consent_callback("assist:consent:yes")
+
+
+def test_privacy_keyboard_uses_opaque_bounded_callbacks_and_rejects_forgery() -> None:
+    group_id = uuid.uuid4()
+    overview = PrivacyOverview(
+        group_sharing_enabled=False,
+        groups=(
+            GroupInfo(
+                group_id=group_id,
+                telegram_chat_id=-1_001_234_567_890,
+                title="Runners <private>",
+                timezone="Europe/Moscow",
+                role=GroupRole.MEMBER,
+                share_level=ShareLevel.NONE,
+                auto_share=False,
+            ),
+        ),
+    )
+
+    keyboard = _privacy_keyboard(overview)
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    rendered = format_privacy(overview)
+
+    assert _parse_privacy_callback(f"priv:r:{group_id.hex}:SUMMARY") == (
+        "group",
+        group_id,
+        "SUMMARY",
+    )
+    assert all(value is not None and len(value.encode()) <= 64 for value in callbacks)
+    assert all(str(overview.groups[0].telegram_chat_id) not in (value or "") for value in callbacks)
+    assert "Runners &lt;private&gt;" in rendered
+    assert "Runners <private>" not in rendered
+    with pytest.raises(ValueError, match="Некорректное"):
+        _parse_privacy_callback(f"priv:r:{group_id.hex}:PUBLISH_NOW")
 
 
 @pytest.mark.asyncio

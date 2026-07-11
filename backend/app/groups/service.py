@@ -22,6 +22,7 @@ from app.groups.schemas import (
     GroupInfo,
     GroupWeek,
     LeaderboardEntry,
+    PrivacyGroupAction,
     PrivacyOverview,
     PublicationDraft,
     ShareTarget,
@@ -159,6 +160,40 @@ class GroupService:
             else:
                 privacy.group_sharing_enabled = True
             return self._group_info(group, member)
+
+    async def set_group_privacy(
+        self,
+        telegram_user_id: int,
+        group_id: uuid.UUID,
+        action: PrivacyGroupAction,
+    ) -> PrivacyOverview:
+        async with self.session_factory.begin() as session:
+            user = await self._require_user(session, telegram_user_id)
+            repository = GroupRepository(session)
+            group = await repository.get_group_by_id(group_id)
+            if group is None:
+                raise GroupError("Группа не найдена.")
+            member = await self._require_active_member(repository, group.id, user.id)
+            privacy = await self._ensure_privacy(repository, user.id)
+            if action == PrivacyGroupAction.NONE:
+                member.share_level = ShareLevel.NONE
+                member.auto_share = False
+            elif action == PrivacyGroupAction.ALWAYS:
+                if member.share_level == ShareLevel.NONE:
+                    member.share_level = ShareLevel.SUMMARY
+                member.auto_share = True
+                privacy.group_sharing_enabled = True
+            else:
+                member.share_level = ShareLevel(action.value)
+                member.auto_share = False
+                privacy.group_sharing_enabled = True
+            memberships = await repository.active_memberships(user.id)
+            return PrivacyOverview(
+                group_sharing_enabled=privacy.group_sharing_enabled,
+                groups=tuple(
+                    self._group_info(item_group, item) for item, item_group in memberships
+                ),
+            )
 
     async def share_targets(
         self, telegram_user_id: int, activity_id: uuid.UUID
@@ -376,6 +411,7 @@ class GroupService:
     @staticmethod
     def _group_info(group: RunningGroup, member: GroupMember) -> GroupInfo:
         return GroupInfo(
+            group_id=group.id,
             telegram_chat_id=group.telegram_chat_id,
             title=group.title,
             timezone=group.timezone,

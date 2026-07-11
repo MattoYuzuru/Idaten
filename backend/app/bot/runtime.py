@@ -19,6 +19,20 @@ from app.services import AppServices
 
 logger = logging.getLogger(__name__)
 
+PRIVATE_BOT_COMMANDS = (
+    BotCommand(command="start", description="Начать работу"),
+    BotCommand(command="menu", description="Главное меню"),
+    BotCommand(command="run", description="Добавить пробежку"),
+    BotCommand(command="stats", description="Личный прогресс"),
+    BotCommand(command="pr", description="Результаты и оценки"),
+    BotCommand(command="next", description="Следующая тренировка"),
+    BotCommand(command="privacy", description="Настройки приватности"),
+    BotCommand(command="link", description="Подключить Health Connect"),
+    BotCommand(command="devices", description="Связанные устройства"),
+    BotCommand(command="revoke_device", description="Отозвать устройство"),
+    BotCommand(command="help", description="Краткая помощь"),
+)
+
 
 class BotRuntime:
     def __init__(self, token: str, services: AppServices, *, outbox_poll_seconds: int = 5) -> None:
@@ -34,24 +48,7 @@ class BotRuntime:
 
     async def start(self) -> None:
         await self.bot.set_my_commands(
-            [
-                BotCommand(command="start", description="Начать работу"),
-                BotCommand(command="menu", description="Главное меню"),
-                BotCommand(command="run", description="Добавить пробежку"),
-                BotCommand(command="stats", description="Статистика за все время"),
-                BotCommand(command="week", description="Текущая неделя"),
-                BotCommand(command="next", description="Следующая тренировка"),
-                BotCommand(command="plan", description="Черновик плана"),
-                BotCommand(command="external_processing", description="Внешний wording"),
-                BotCommand(command="pr", description="Личные результаты"),
-                BotCommand(command="privacy", description="Настройки приватности"),
-                BotCommand(command="share", description="Sharing для группы"),
-                BotCommand(command="imports", description="История импортов"),
-                BotCommand(command="link", description="Связать Android Health Connect"),
-                BotCommand(command="devices", description="Связанные Android-устройства"),
-                BotCommand(command="revoke_device", description="Отозвать Android token"),
-                BotCommand(command="help", description="Помощь"),
-            ],
+            list(PRIVATE_BOT_COMMANDS),
             scope=BotCommandScopeAllPrivateChats(),
         )
         await self.bot.set_my_commands(

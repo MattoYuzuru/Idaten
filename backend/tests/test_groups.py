@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
@@ -11,7 +12,7 @@ from app.activities.schemas import ManualRunInput
 from app.core.config import Settings
 from app.db.base import Base
 from app.groups.models import ActivityShareGrant, GroupMember, GroupPublication, ShareLevel
-from app.groups.schemas import GroupError, PublicationDraft
+from app.groups.schemas import GroupError, PrivacyGroupAction, PublicationDraft
 from app.services import AppServices, build_services
 from app.users.schemas import TelegramIdentity
 
@@ -100,6 +101,35 @@ async def test_group_setup_is_idempotent_and_join_defaults_to_no_sharing(
     async with session_factory() as session:
         memberships = await session.scalar(select(func.count(GroupMember.id)))
     assert memberships == 2
+
+
+@pytest.mark.asyncio
+async def test_interactive_privacy_is_idempotent_and_rechecks_membership(
+    group_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, _session_factory = group_context
+    await setup_group(services)
+    group_id = (await services.groups.privacy_overview(42)).groups[0].group_id
+
+    detailed = await services.groups.set_group_privacy(42, group_id, PrivacyGroupAction.DETAILED)
+    repeated = await services.groups.set_group_privacy(42, group_id, PrivacyGroupAction.DETAILED)
+    always = await services.groups.set_group_privacy(42, group_id, PrivacyGroupAction.ALWAYS)
+    disabled = await services.groups.set_privacy(42, enabled=False)
+    none = await services.groups.set_group_privacy(42, group_id, PrivacyGroupAction.NONE)
+
+    assert detailed.groups[0].share_level == ShareLevel.DETAILED
+    assert repeated == detailed
+    assert always.groups[0].auto_share
+    assert not disabled.group_sharing_enabled
+    assert not disabled.groups[0].auto_share
+    assert none.groups[0].share_level == ShareLevel.NONE
+    assert not none.groups[0].auto_share
+
+    await services.users.register(identity(43))
+    with pytest.raises(GroupError, match="присоедин"):
+        await services.groups.set_group_privacy(43, group_id, PrivacyGroupAction.SUMMARY)
+    with pytest.raises(GroupError, match="не найдена"):
+        await services.groups.set_group_privacy(42, uuid.uuid4(), PrivacyGroupAction.SUMMARY)
 
 
 @pytest.mark.asyncio
