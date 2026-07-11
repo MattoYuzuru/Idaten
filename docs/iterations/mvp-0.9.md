@@ -224,3 +224,32 @@ eligibility.
 - Добавить новую ADR только если выбранное изменение coach contract или
   interactive privacy потребует менять устойчивое privacy/schema/deployment
   решение; старые ADR не редактировать.
+
+## Статус реализации
+
+- [x] Assisted text/photo/image-document показывают один placeholder и `typing`,
+  редактируют его в preview и завершают статус в `finally`; fallback создаётся один раз.
+- [x] Public commands, help и menu очищены; скрытая `/ai_access` и group `/week` сохранены
+  в своих scope, file import продолжает запускаться отправкой файла.
+- [x] 5 км, 10 км и полумарафон используют единый ±2% contract; оценки по темпу явно
+  отделены от фактических результатов.
+- [x] `/stats` показывает текущую неделю, all-time, два 28-дневных окна и числовой
+  восьминедельный Unicode-график в timezone пользователя.
+- [x] Coach facts/rules v2 используют completed chronology, текущую и две предыдущие
+  локальные недели; `/next` содержит дату, дистанцию, длительность, темп и русские причины.
+- [x] `/privacy` управляет global/group настройками через bounded UUID callbacks и
+  повторные application-service checks без публикации данных.
+- [x] Ruff, strict mypy, 128 pytest, PostgreSQL 17 clean/previous-head/roundtrip Alembic,
+  runtime health/readiness, deployment и Android debug gates прошли локально.
+- [ ] Clean Docker image build на этой workstation блокируется TLS interception при
+  загрузке `hatchling`; обязательное подтверждение — GitHub CI image job.
+
+## Known limitations
+
+- Физические iOS/Android/Desktop Telegram-клиенты не были доступны автоматическому
+  агенту. Пункты 13–16 manual checklist в `docs/deployment.md` обязательны перед release.
+- Live extraction smoke с Samsung Health screenshot требует owner-controlled key/input;
+  raw image, input и key нельзя печатать или прикладывать к PR.
+- Локальная точная ошибка Docker: `SSLCertVerificationError` с текстом
+  `self-signed certificate in certificate chain` при загрузке build dependency `hatchling`.
+  Production Dockerfile не ослаблялся через `trusted-host`; clean CI build остаётся gate.
