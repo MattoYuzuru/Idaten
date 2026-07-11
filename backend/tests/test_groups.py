@@ -158,7 +158,16 @@ async def test_forged_publication_draft_is_rejected_without_grant(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "scenario",
-    ["privacy_off", "share_none", "private", "revoked", "strava", "deleted"],
+    [
+        "privacy_off",
+        "share_none",
+        "private",
+        "revoked",
+        "strava",
+        "text",
+        "screenshot",
+        "deleted",
+    ],
 )
 async def test_privacy_failures_block_publication_and_leaderboard(
     group_context: tuple[AppServices, async_sessionmaker[AsyncSession]], scenario: str
@@ -181,6 +190,10 @@ async def test_privacy_failures_block_publication_and_leaderboard(
                 activity.visibility = ActivityVisibility.PRIVATE
             elif scenario == "strava":
                 activity.source_type = SourceType.STRAVA
+            elif scenario == "text":
+                activity.source_type = SourceType.TEXT
+            elif scenario == "screenshot":
+                activity.source_type = SourceType.SCREENSHOT
             elif scenario == "deleted":
                 activity.deleted_at = NOW
 
@@ -188,6 +201,8 @@ async def test_privacy_failures_block_publication_and_leaderboard(
     with pytest.raises(GroupError, match=expected_error):
         await services.groups.record_publication(draft, 101)
     assert await services.groups.leaderboard(GROUP_CHAT_ID, NOW) == ()
+    assert (await services.groups.week(GROUP_CHAT_ID, NOW)).run_count == 0
+    assert await services.groups.streaks(GROUP_CHAT_ID, NOW) == ()
 
 
 @pytest.mark.asyncio

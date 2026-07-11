@@ -1,9 +1,11 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.activities.duplicates import duplicate_tolerance, metrics_match
 from app.activities.models import (
     Activity,
     ActivitySource,
@@ -12,7 +14,12 @@ from app.activities.models import (
     ManualDraftStatus,
     SourceType,
 )
-from app.activities.schemas import ActivitySummary, AggregateStats, RunHistoryItem
+from app.activities.schemas import (
+    ActivitySummary,
+    AggregateStats,
+    PotentialDuplicate,
+    RunHistoryItem,
+)
 
 
 class ActivityRepository:
@@ -33,6 +40,21 @@ class ActivityRepository:
         self.session.add(source)
         await self.session.flush()
         return source
+
+    async def exact_activity(
+        self, user_id: uuid.UUID, source_type: SourceType, external_id: str | None
+    ) -> Activity | None:
+        if external_id is None:
+            return None
+        result = await self.session.execute(
+            select(Activity).where(
+                Activity.user_id == user_id,
+                Activity.source_type == source_type,
+                Activity.external_id == external_id,
+                Activity.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
 
     def add(self, activity: Activity) -> None:
         self.session.add(activity)
@@ -107,6 +129,7 @@ class ActivityRepository:
                 avg_pace_sec_per_km=activity.avg_pace_sec_per_km,
                 title=activity.title,
                 source_type=activity.source_type,
+                start_time_known=activity.start_time_known,
             )
             for activity in activities
         )
@@ -120,6 +143,62 @@ class ActivityRepository:
                 )
             )
         ).scalar_one_or_none()
+
+    async def duplicate_candidates(
+        self,
+        user_id: uuid.UUID,
+        *,
+        local_date: date,
+        timezone: str,
+        distance_m: int,
+        elapsed_time_sec: int,
+    ) -> tuple[PotentialDuplicate, ...]:
+        zone = ZoneInfo(timezone)
+        started_from = datetime.combine(local_date, time.min, zone).astimezone(UTC)
+        started_before = datetime.combine(
+            local_date + timedelta(days=1), time.min, zone
+        ).astimezone(UTC)
+        tolerance = duplicate_tolerance(distance_m, elapsed_time_sec)
+        statement = (
+            select(Activity)
+            .where(
+                Activity.user_id == user_id,
+                Activity.started_at >= started_from,
+                Activity.started_at < started_before,
+                or_(
+                    Activity.distance_m.between(
+                        distance_m - tolerance.distance_m,
+                        distance_m + tolerance.distance_m,
+                    ),
+                    Activity.elapsed_time_sec.between(
+                        elapsed_time_sec - tolerance.elapsed_time_sec,
+                        elapsed_time_sec + tolerance.elapsed_time_sec,
+                    ),
+                ),
+                Activity.deleted_at.is_(None),
+            )
+            .order_by(Activity.started_at, Activity.id)
+        )
+        activities = (await self.session.execute(statement)).scalars().all()
+        candidates: list[PotentialDuplicate] = []
+        for activity in activities:
+            distance_matches, duration_matches = metrics_match(
+                existing_distance_m=activity.distance_m,
+                existing_elapsed_time_sec=activity.elapsed_time_sec,
+                distance_m=distance_m,
+                elapsed_time_sec=elapsed_time_sec,
+            )
+            candidates.append(
+                PotentialDuplicate(
+                    activity_id=activity.id,
+                    started_at=activity.started_at,
+                    distance_m=activity.distance_m,
+                    elapsed_time_sec=activity.elapsed_time_sec,
+                    distance_matches=distance_matches,
+                    duration_matches=duration_matches,
+                )
+            )
+        return tuple(candidates)
 
     async def manual_draft(
         self, draft_id: uuid.UUID, *, for_update: bool = False

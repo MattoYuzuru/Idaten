@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.activities.models import SourceType
+from app.activities.models import DraftInputMethod, SourceType
 
 
 class ActivityInputError(ValueError):
@@ -24,6 +24,25 @@ class ManualRunInput:
     avg_cadence_spm: int | None = None
     elevation_gain_m: int | None = None
     title: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PotentialDuplicate:
+    activity_id: uuid.UUID
+    started_at: datetime
+    distance_m: int
+    elapsed_time_sec: int
+    distance_matches: bool
+    duration_matches: bool
+
+
+class PossibleDuplicateError(ActivityInputError):
+    def __init__(
+        self, candidates: tuple[PotentialDuplicate, ...], *, run: ManualRunInput | None = None
+    ) -> None:
+        super().__init__("Найдена похожая пробежка; проверьте preview.")
+        self.candidates = candidates
+        self.run = run
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +83,7 @@ class RunHistoryItem:
     avg_pace_sec_per_km: int
     title: str | None
     source_type: SourceType
+    start_time_known: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +104,11 @@ class ManualDraft:
     run: ManualRunInput
     complete: bool
     telegram_message_id: int | None
+    input_method: DraftInputMethod = DraftInputMethod.STEPS
+    source_type: SourceType = SourceType.MANUAL
+    date_confirmed: bool = True
+    start_time_known: bool = True
+    duplicate_candidates: tuple[PotentialDuplicate, ...] = ()
 
 
 def parse_distance_km(value: str) -> int:

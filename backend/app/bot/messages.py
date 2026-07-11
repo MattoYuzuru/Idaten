@@ -1,6 +1,8 @@
 # ruff: noqa: E501
 from html import escape
+from zoneinfo import ZoneInfo
 
+from app.activities.models import DraftInputMethod
 from app.activities.schemas import (
     ActivitySummary,
     AggregateStats,
@@ -14,7 +16,7 @@ from app.groups.schemas import GroupWeek, LeaderboardEntry, PrivacyOverview, Str
 from app.ingestion.schemas import ImportHistoryItem, ImportPreview
 
 HELP_TEXT = (
-    "<b>Idaten 0.7</b>\n\n"
+    "<b>Idaten 0.8</b>\n\n"
     "Сохраняет private-пробежки, синхронизирует Health Connect и показывает прогресс. "
     "Выберите раздел справки ниже."
 )
@@ -27,7 +29,7 @@ HELP_SECTIONS = {
 /help — private/group — полная справка по категориям. Пример: /help.""",
     "activities": """<b>Активности и аналитика</b>
 
-/run — private — кнопочный мастер.
+/run — private — выбор: ввод по шагам, описание текстом или JPEG/PNG-скриншот. Text и screenshot требуют отдельного consent и доступа владельца; raw input не сохраняется.
 /run &lt;км&gt; &lt;MM:SS|H:MM:SS&gt; [date=YYYY-MM-DD] [time=HH:MM] [moving=H:MM:SS] [hr=&lt;avg&gt;] [max_hr=&lt;max&gt;] [cadence=&lt;spm&gt;] [elevation=&lt;м&gt;] [title=&quot;...&quot;] [tz=&lt;IANA&gt;]
 Пример: /run 21.10 1:55:30 date=2026-06-16 time=07:30 hr=152 max_hr=178 cadence=171 elevation=164 title=&quot;Полумарафон&quot;.
 Результат: private Activity, отчет и отдельный opt-in на публикацию.
@@ -49,10 +51,12 @@ Telegram сам не читает Health Connect; sync остаётся foregrou
 /setup_group — group admin — настроить группу. /join, /leave — group.
 /month, /leaderboard, /streaks, /week — group. /group_goal &lt;км&gt; — group admin.
 Пример: /share -100123 summary. Activity по умолчанию private; HR, cadence, точное время, route и raw payload в группу не отправляются.""",
-    "external": """<b>Внешний wording</b>
+    "external": """<b>Внешняя обработка</b>
 
 /external_processing on|off — private. По умолчанию off. При on внешний provider получает только allowlisted facts и каноническую рекомендацию, но не raw activity, GPS/route или токены.
-Пример: /external_processing off.""",
+Пример: /external_processing off.
+
+Распознавание text/screenshot имеет отдельное versioned consent, owner approval и лимиты. Оно не включает внешний coach wording автоматически.""",
 }
 
 
@@ -84,12 +88,22 @@ def format_manual_draft(draft: ManualDraft) -> str:
     run = draft.run
     distance = f"{run.distance_m / 1000:.2f} км" if run.distance_m else "не указана"
     duration = format_duration(run.elapsed_time_sec) if run.elapsed_time_sec else "не указана"
+    input_label = {
+        DraftInputMethod.STEPS: "ввод по шагам",
+        DraftInputMethod.TEXT: "описание текстом",
+        DraftInputMethod.SCREENSHOT: "скриншот",
+    }[draft.input_method]
     lines = [
         "🏃 <b>Новая пробежка</b>",
+        f"Способ: {input_label}",
         f"Дистанция: <b>{distance}</b>",
         f"Длительность: <b>{duration}</b>",
-        f"Дата: {run.started_at:%d.%m.%Y %H:%M} ({escape(run.timezone or 'UTC')})",
     ]
+    if draft.date_confirmed:
+        clock = f" {run.started_at:%H:%M}" if draft.start_time_known else ""
+        lines.append(f"Дата: {run.started_at:%d.%m.%Y}{clock} ({escape(run.timezone or 'UTC')})")
+    else:
+        lines.append("Дата: <b>не указана</b>")
     if run.moving_time_sec is not None:
         lines.append(f"Moving time: {format_duration(run.moving_time_sec)}")
     if run.avg_hr is not None or run.max_hr is not None:
@@ -100,6 +114,15 @@ def format_manual_draft(draft: ManualDraft) -> str:
         lines.append(f"Набор высоты: {run.elevation_gain_m} м")
     if run.title:
         lines.append(f"Название: {escape(run.title)}")
+    if draft.duplicate_candidates:
+        lines.append("\n⚠️ <b>Похожие пробежки в этот день</b>")
+        zone = ZoneInfo(run.timezone or "UTC")
+        for candidate in draft.duplicate_candidates[:3]:
+            lines.append(
+                f"• {candidate.started_at.astimezone(zone):%d.%m.%Y} · "
+                f"{candidate.distance_m / 1000:.2f} км · "
+                f"{format_duration(candidate.elapsed_time_sec)}"
+            )
     lines.append("\nActivity останется private. Выберите поле или сохраните.")
     return "\n".join(lines)
 
@@ -116,8 +139,9 @@ def format_run_history(groups: tuple[DailyRunGroup, ...], offset: int = 0, size:
         )
         for run in reversed(group.runs):
             title = f" · {escape(run.title)}" if run.title else ""
+            clock = f"{run.started_at:%H:%M} · " if run.start_time_known else ""
             lines.append(
-                f"• {run.started_at:%H:%M} · {run.distance_m / 1000:.2f} км · "
+                f"• {clock}{run.distance_m / 1000:.2f} км · "
                 f"{format_duration(run.elapsed_time_sec)}{title}"
             )
     return "\n".join(lines)

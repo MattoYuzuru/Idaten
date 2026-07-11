@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.activities.duplicates import duplicate_tolerance, metrics_match
 from app.analytics.metrics import (
     MetricsError,
     calculate_pace_sec_per_km,
@@ -38,3 +39,14 @@ def test_week_period_uses_local_calendar_dates() -> None:
         )
         == "15–21 июня"
     )
+
+
+def test_duplicate_tolerance_matches_either_distance_or_duration() -> None:
+    assert duplicate_tolerance(10_000, 3_600).distance_m == 300
+    assert duplicate_tolerance(1_000, 1_000).elapsed_time_sec == 120
+    assert metrics_match(
+        existing_distance_m=14_000,
+        existing_elapsed_time_sec=3_700,
+        distance_m=10_000,
+        elapsed_time_sec=3_600,
+    ) == (False, True)

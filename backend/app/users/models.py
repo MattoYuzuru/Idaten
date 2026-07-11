@@ -13,6 +13,8 @@ class User(TimestampMixin, Base):
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
     locale: Mapped[str] = mapped_column(String(16), default="ru")
     external_processing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    assisted_input_consent_version: Mapped[str | None] = mapped_column(String(32))
+    assisted_input_consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class TelegramAccount(Base):

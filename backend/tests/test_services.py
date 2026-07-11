@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from app.activities.models import Activity, CoachReport
-from app.activities.schemas import ManualRunInput
+from app.activities.schemas import ManualRunInput, PossibleDuplicateError
 from app.core.config import Settings
 from app.db.base import Base
 from app.services import AppServices, build_services
@@ -101,9 +101,7 @@ async def test_persistent_manual_draft_confirm_is_idempotent(
     service_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
 ) -> None:
     services, session_factory = service_context
-    draft = await services.activities.start_manual_draft(
-        identity(), datetime(2026, 7, 8, 12, tzinfo=UTC)
-    )
+    draft = await services.activities.start_manual_draft(identity(), datetime.now(UTC))
     await services.activities.set_manual_draft_field(42, draft.draft_id, "distance", "10.02")
     await services.activities.set_manual_draft_field(42, draft.draft_id, "elapsed", "1:02:41")
     await services.activities.set_manual_draft_field(42, draft.draft_id, "hr", "152")
@@ -126,3 +124,75 @@ async def test_persistent_manual_draft_confirm_is_idempotent(
         assert activities[0].avg_cadence_spm == 171
         assert activities[0].elevation_gain_m == 164
         assert activities[0].title == "Tempo <private>"
+
+
+@pytest.mark.asyncio
+async def test_manual_duplicate_uses_local_day_and_either_metric(
+    service_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, session_factory = service_context
+    first = ManualRunInput(
+        10_000,
+        3_600,
+        datetime(2026, 7, 8, 5, tzinfo=UTC),
+        "Europe/Moscow",
+    )
+    await services.activities.record_manual_run(identity(), first)
+    similar_distance = ManualRunInput(
+        10_150,
+        5_000,
+        datetime(2026, 7, 8, 17, tzinfo=UTC),
+        "Europe/Moscow",
+    )
+
+    with pytest.raises(PossibleDuplicateError) as captured:
+        await services.activities.record_manual_run(identity(), similar_distance)
+
+    assert captured.value.candidates[0].distance_matches
+    assert not captured.value.candidates[0].duration_matches
+    await services.activities.record_manual_run(
+        identity(), similar_distance, accept_possible_duplicate=True
+    )
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count(Activity.id))) == 2
+
+
+@pytest.mark.asyncio
+async def test_manual_duplicate_excludes_other_local_day_and_soft_deleted_activity(
+    service_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, session_factory = service_context
+    await services.activities.record_manual_run(
+        identity(),
+        ManualRunInput(
+            5_000,
+            1_800,
+            datetime(2026, 7, 8, 20, 30, tzinfo=UTC),
+            "Europe/Moscow",
+        ),
+    )
+    next_local_day = await services.activities.record_manual_run(
+        identity(),
+        ManualRunInput(
+            5_000,
+            1_800,
+            datetime(2026, 7, 8, 21, 30, tzinfo=UTC),
+            "Europe/Moscow",
+        ),
+    )
+    async with session_factory.begin() as session:
+        activity = await session.get(Activity, next_local_day.activity.activity_id)
+        assert activity is not None
+        activity.deleted_at = datetime(2026, 7, 9, tzinfo=UTC)
+
+    saved = await services.activities.record_manual_run(
+        identity(),
+        ManualRunInput(
+            5_100,
+            1_900,
+            datetime(2026, 7, 9, 5, tzinfo=UTC),
+            "Europe/Moscow",
+        ),
+    )
+
+    assert saved.created

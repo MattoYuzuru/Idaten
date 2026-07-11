@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from app.activities import models as activity_models  # noqa: F401
+from app.assisted import models as assisted_models  # noqa: F401
 from app.coach import models as coach_models  # noqa: F401
 from app.core.config import get_settings
 from app.db.alembic import escape_config_percent
