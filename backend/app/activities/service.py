@@ -497,20 +497,27 @@ class ActivityService:
                 raise ActivityInputError("Название: от 1 до 255 символов.")
             draft.title = value.strip()
         elif field in {"date", "time"}:
-            local = (draft.started_at or now).astimezone(ZoneInfo(draft.timezone))
+            draft_timezone = ZoneInfo(draft.timezone)
+            local = draft.started_at or now
+            # SQLite returns timezone-aware columns as naive datetimes. Treat that
+            # value as the draft's declared local time instead of converting it
+            # from the host timezone, which would shift an extracted time in CI.
+            if local.tzinfo is None:
+                local = local.replace(tzinfo=draft_timezone)
+            local = local.astimezone(draft_timezone)
             try:
                 if field == "date":
                     from datetime import date
 
                     local = datetime.combine(
-                        date.fromisoformat(value), local.timetz(), ZoneInfo(draft.timezone)
+                        date.fromisoformat(value), local.timetz(), draft_timezone
                     )
                     draft.date_confirmed = True
                 else:
                     from datetime import time
 
                     local = datetime.combine(
-                        local.date(), time.fromisoformat(value), ZoneInfo(draft.timezone)
+                        local.date(), time.fromisoformat(value), draft_timezone
                     )
                     draft.start_time_known = True
             except ValueError as error:
