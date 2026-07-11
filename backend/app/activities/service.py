@@ -10,6 +10,7 @@ from app.activities.models import (
     Activity,
     ActivityVisibility,
     CoachReport,
+    DraftInputMethod,
     ManualActivityDraft,
     ManualDraftStatus,
     ReportType,
@@ -24,6 +25,8 @@ from app.activities.schemas import (
     ManualDraft,
     ManualRunInput,
     PersonalRecords,
+    PossibleDuplicateError,
+    PotentialDuplicate,
     RecordedRun,
     parse_run_command,
 )
@@ -52,24 +55,43 @@ class ActivityService:
         self.user_service = user_service
 
     async def record_manual_run(
-        self, identity: TelegramIdentity, run: ManualRunInput
+        self,
+        identity: TelegramIdentity,
+        run: ManualRunInput,
+        *,
+        accept_possible_duplicate: bool = False,
     ) -> RecordedRun:
         user = await self.user_service.register(identity)
         normalized = ManualAdapter().normalize(run, user.timezone)
         validate_normalized(normalized)
         async with self.session_factory.begin() as session:
+            candidates = await self._run_duplicates(session, user, run)
+            if candidates and not accept_possible_duplicate:
+                raise PossibleDuplicateError(candidates, run=run)
             return await self._record_manual_run(session, user, run)
 
     async def record_manual_command(
-        self, identity: TelegramIdentity, arguments: str | None, now: datetime
+        self,
+        identity: TelegramIdentity,
+        arguments: str | None,
+        now: datetime,
+        *,
+        accept_possible_duplicate: bool = False,
     ) -> RecordedRun:
         user = await self.user_service.register(identity)
         run = parse_run_command(arguments, now, user.timezone)
         async with self.session_factory.begin() as session:
+            candidates = await self._run_duplicates(session, user, run)
+            if candidates and not accept_possible_duplicate:
+                raise PossibleDuplicateError(candidates, run=run)
             return await self._record_manual_run(session, user, run)
 
     async def start_manual_draft(
-        self, identity: TelegramIdentity, now: datetime | None = None
+        self,
+        identity: TelegramIdentity,
+        now: datetime | None = None,
+        *,
+        prefill: ManualRunInput | None = None,
     ) -> ManualDraft:
         user = await self.user_service.register(identity)
         moment = now or datetime.now(UTC)
@@ -80,17 +102,31 @@ class ActivityService:
                 active.status = ManualDraftStatus.EXPIRED
                 await session.flush()
                 active = None
+            if active is not None and prefill is not None:
+                active.status = ManualDraftStatus.CANCELLED
+                active = None
             if active is None:
                 active = ManualActivityDraft(
                     user_id=user.id,
                     timezone=user.timezone,
                     status=ManualDraftStatus.ACTIVE,
                     expires_at=moment + timedelta(hours=24),
-                    pending_field="distance",
+                    input_method=DraftInputMethod.STEPS,
+                    source_type=SourceType.MANUAL,
+                    pending_field=None if prefill is not None else "distance",
+                    distance_m=prefill.distance_m if prefill is not None else None,
+                    elapsed_time_sec=(prefill.elapsed_time_sec if prefill is not None else None),
+                    moving_time_sec=(prefill.moving_time_sec if prefill is not None else None),
+                    started_at=prefill.started_at if prefill is not None else None,
+                    avg_hr=prefill.avg_hr if prefill is not None else None,
+                    max_hr=prefill.max_hr if prefill is not None else None,
+                    avg_cadence_spm=(prefill.avg_cadence_spm if prefill is not None else None),
+                    elevation_gain_m=(prefill.elevation_gain_m if prefill is not None else None),
+                    title=prefill.title if prefill is not None else None,
                 )
                 session.add(active)
                 await session.flush()
-            return self._draft_dto(active, moment)
+            return await self._draft_dto(session, active, user, moment)
 
     async def set_manual_draft_field(
         self,
@@ -112,7 +148,7 @@ class ActivityService:
             run = self._draft_run(draft, moment)
             if draft.distance_m is not None and draft.elapsed_time_sec is not None:
                 validate_normalized(ManualAdapter().normalize(run, user.timezone))
-            return self._draft_dto(draft, moment)
+            return await self._draft_dto(session, draft, user, moment)
 
     async def choose_manual_draft_field(
         self, telegram_user_id: int, draft_id: uuid.UUID, field: str
@@ -139,7 +175,7 @@ class ActivityService:
             assert draft is not None
             draft.pending_field = field
             draft.version += 1
-            return self._draft_dto(draft, moment)
+            return await self._draft_dto(session, draft, user, moment)
 
     async def pending_manual_draft(self, telegram_user_id: int) -> tuple[ManualDraft, str] | None:
         async with self.session_factory() as session:
@@ -147,7 +183,18 @@ class ActivityService:
             draft = await ActivityRepository(session).active_manual_draft(user.id)
             if draft is None or draft.pending_field is None:
                 return None
-            return self._draft_dto(draft, datetime.now(UTC)), draft.pending_field
+            return (
+                await self._draft_dto(session, draft, user, datetime.now(UTC)),
+                draft.pending_field,
+            )
+
+    async def manual_draft(self, telegram_user_id: int, draft_id: uuid.UUID) -> ManualDraft:
+        async with self.session_factory() as session:
+            user = await self._require_user(session, telegram_user_id)
+            draft = await ActivityRepository(session).manual_draft(draft_id)
+            if draft is None or draft.user_id != user.id:
+                raise ActivityInputError("Черновик не найден.")
+            return await self._draft_dto(session, draft, user, datetime.now(UTC))
 
     async def attach_manual_draft_message(
         self, telegram_user_id: int, draft_id: uuid.UUID, message_id: int
@@ -170,9 +217,15 @@ class ActivityService:
                 draft.status = ManualDraftStatus.CANCELLED
                 draft.pending_field = None
                 draft.version += 1
-            return self._draft_dto(draft, moment)
+            return await self._draft_dto(session, draft, user, moment)
 
-    async def confirm_manual_draft(self, telegram_user_id: int, draft_id: uuid.UUID) -> RecordedRun:
+    async def confirm_manual_draft(
+        self,
+        telegram_user_id: int,
+        draft_id: uuid.UUID,
+        *,
+        accept_possible_duplicate: bool = False,
+    ) -> RecordedRun:
         moment = datetime.now(UTC)
         async with self.session_factory.begin() as session:
             user = await self._require_user(session, telegram_user_id)
@@ -185,7 +238,33 @@ class ActivityService:
             run = self._draft_run(draft, moment)
             if draft.distance_m is None or draft.elapsed_time_sec is None:
                 raise ActivityInputError("Укажите дистанцию и длительность.")
-            result = await self._record_manual_run(session, user, run)
+            if not draft.date_confirmed:
+                raise ActivityInputError("Укажите дату пробежки.")
+            external_id = (
+                f"sha256:{draft.input_sha256}"
+                if draft.source_type == SourceType.SCREENSHOT and draft.input_sha256
+                else None
+            )
+            exact = await ActivityRepository(session).exact_activity(
+                user.id, draft.source_type, external_id
+            )
+            if exact is not None:
+                draft.status = ManualDraftStatus.SAVED
+                draft.activity_id = exact.id
+                draft.pending_field = None
+                draft.version += 1
+                return await self._recorded_activity(session, exact.id)
+            candidates = await self._run_duplicates(session, user, run)
+            if candidates and not accept_possible_duplicate:
+                raise PossibleDuplicateError(candidates, run=run)
+            result = await self._record_manual_run(
+                session,
+                user,
+                run,
+                source_type=draft.source_type,
+                start_time_known=draft.start_time_known,
+                external_id=external_id,
+            )
             draft.status = ManualDraftStatus.SAVED
             draft.activity_id = result.activity.activity_id
             draft.pending_field = None
@@ -221,19 +300,28 @@ class ActivityService:
             )
 
     async def _record_manual_run(
-        self, session: AsyncSession, user: User, run: ManualRunInput
+        self,
+        session: AsyncSession,
+        user: User,
+        run: ManualRunInput,
+        *,
+        source_type: SourceType = SourceType.MANUAL,
+        start_time_known: bool = True,
+        external_id: str | None = None,
     ) -> RecordedRun:
         normalized = ManualAdapter().normalize(run, user.timezone)
         validate_normalized(normalized)
         repository = ActivityRepository(session)
-        source = await repository.get_or_create_source(user.id, SourceType.MANUAL)
+        source = await repository.get_or_create_source(user.id, source_type)
         activity = Activity(
             user_id=user.id,
             source_id=source.id,
-            source_type=SourceType.MANUAL,
+            source_type=source_type,
+            external_id=external_id,
             activity_type=normalized.activity_type,
             title=normalized.title,
             started_at=normalized.started_at,
+            start_time_known=start_time_known,
             timezone=normalized.timezone,
             distance_m=normalized.distance_m,
             elapsed_time_sec=normalized.elapsed_time_sec,
@@ -309,10 +397,13 @@ class ActivityService:
 
     @staticmethod
     def _draft_run(draft: ManualActivityDraft, now: datetime) -> ManualRunInput:
+        started_at = draft.started_at or now.astimezone(ZoneInfo(draft.timezone))
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=ZoneInfo(draft.timezone))
         return ManualRunInput(
             distance_m=draft.distance_m or 0,
             elapsed_time_sec=draft.elapsed_time_sec or 0,
-            started_at=draft.started_at or now.astimezone(ZoneInfo(draft.timezone)),
+            started_at=started_at,
             timezone=draft.timezone,
             moving_time_sec=draft.moving_time_sec,
             avg_hr=draft.avg_hr,
@@ -322,16 +413,45 @@ class ActivityService:
             title=draft.title,
         )
 
-    @staticmethod
-    def _draft_dto(draft: ManualActivityDraft, now: datetime) -> ManualDraft:
+    async def _draft_dto(
+        self, session: AsyncSession, draft: ManualActivityDraft, user: User, now: datetime
+    ) -> ManualDraft:
+        duplicates: tuple[PotentialDuplicate, ...] = ()
+        if (
+            draft.distance_m is not None
+            and draft.elapsed_time_sec is not None
+            and draft.date_confirmed
+        ):
+            duplicates = await self._run_duplicates(session, user, self._draft_run(draft, now))
         return ManualDraft(
             draft.id,
             draft.version,
             draft.expires_at,
             draft.status.value,
             ActivityService._draft_run(draft, now),
-            draft.distance_m is not None and draft.elapsed_time_sec is not None,
+            draft.distance_m is not None
+            and draft.elapsed_time_sec is not None
+            and draft.date_confirmed,
             draft.telegram_message_id,
+            draft.input_method,
+            draft.source_type,
+            draft.date_confirmed,
+            draft.start_time_known,
+            duplicates,
+        )
+
+    @staticmethod
+    async def _run_duplicates(
+        session: AsyncSession, user: User, run: ManualRunInput
+    ) -> tuple[PotentialDuplicate, ...]:
+        timezone = run.timezone or user.timezone
+        local_date = run.started_at.astimezone(ZoneInfo(timezone)).date()
+        return await ActivityRepository(session).duplicate_candidates(
+            user.id,
+            local_date=local_date,
+            timezone=timezone,
+            distance_m=run.distance_m,
+            elapsed_time_sec=run.elapsed_time_sec,
         )
 
     @staticmethod
@@ -385,12 +505,14 @@ class ActivityService:
                     local = datetime.combine(
                         date.fromisoformat(value), local.timetz(), ZoneInfo(draft.timezone)
                     )
+                    draft.date_confirmed = True
                 else:
                     from datetime import time
 
                     local = datetime.combine(
                         local.date(), time.fromisoformat(value), ZoneInfo(draft.timezone)
                     )
+                    draft.start_time_known = True
             except ValueError as error:
                 raise ActivityInputError("Дата: YYYY-MM-DD, время: HH:MM.") from error
             draft.started_at = local

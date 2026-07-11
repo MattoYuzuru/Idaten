@@ -3,6 +3,13 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.activities.service import ActivityService
+from app.assisted.provider import (
+    ActivityExtractionProvider,
+    ExtractionProviderName,
+    NoneActivityExtractionProvider,
+    OpenAIActivityExtractionProvider,
+)
+from app.assisted.service import AssistedActivityService
 from app.coach.provider import (
     JsonHttpWordingProvider,
     LLMProviderName,
@@ -31,6 +38,7 @@ class AppServices:
     outbox: TelegramOutboxService
     coach: CoachService
     monthly: MonthlyReportService
+    assisted: AssistedActivityService
 
 
 def build_services(
@@ -79,6 +87,35 @@ def build_services(
             retries=settings.llm_retries,
         ),
     )
+    extraction_provider: ActivityExtractionProvider = NoneActivityExtractionProvider()
+    extraction_provider_name = ExtractionProviderName(settings.activity_extraction_provider.upper())
+    if (
+        extraction_provider_name == ExtractionProviderName.OPENAI
+        and settings.extraction_api_key
+        and settings.activity_extraction_model.strip()
+    ):
+        extraction_provider = OpenAIActivityExtractionProvider(
+            settings.activity_extraction_model,
+            settings.extraction_api_key,
+            settings.activity_extraction_endpoint,
+            request_timeout_seconds=settings.activity_extraction_timeout_seconds,
+        )
+    assisted = AssistedActivityService(
+        session_factory,
+        users,
+        extraction_provider,
+        enabled=(
+            settings.activity_extraction_enabled and settings.bot_owner_telegram_id is not None
+        ),
+        owner_telegram_user_id=settings.bot_owner_telegram_id,
+        max_text_chars=settings.activity_extraction_max_text_chars,
+        max_image_bytes=settings.activity_extraction_max_image_bytes,
+        max_image_pixels=settings.activity_extraction_max_image_pixels,
+        daily_user_limit=settings.activity_extraction_daily_user_limit,
+        monthly_global_limit=settings.activity_extraction_monthly_global_limit,
+        timeout_seconds=settings.activity_extraction_timeout_seconds,
+        retries=settings.activity_extraction_retries,
+    )
     return AppServices(
         users=users,
         activities=ActivityService(session_factory, users),
@@ -96,4 +133,5 @@ def build_services(
         outbox=TelegramOutboxService(session_factory),
         coach=coach,
         monthly=MonthlyReportService(session_factory),
+        assisted=assisted,
     )

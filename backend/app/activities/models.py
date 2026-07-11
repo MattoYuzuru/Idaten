@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -32,6 +33,7 @@ class SourceType(StrEnum):
     FIT = "FIT"
     TCX = "TCX"
     CSV = "CSV"
+    TEXT = "TEXT"
     SCREENSHOT = "SCREENSHOT"
     SAMSUNG_EXPORT = "SAMSUNG_EXPORT"
 
@@ -112,6 +114,7 @@ class Activity(TimestampMixin, Base):
     )
     title: Mapped[str | None] = mapped_column(String(255))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    start_time_known: Mapped[bool] = mapped_column(Boolean, default=True)
     timezone: Mapped[str] = mapped_column(String(64))
     distance_m: Mapped[int] = mapped_column(Integer)
     elapsed_time_sec: Mapped[int] = mapped_column(Integer)
@@ -134,6 +137,12 @@ class ManualDraftStatus(StrEnum):
     SAVED = "SAVED"
     CANCELLED = "CANCELLED"
     EXPIRED = "EXPIRED"
+
+
+class DraftInputMethod(StrEnum):
+    STEPS = "STEPS"
+    TEXT = "TEXT"
+    SCREENSHOT = "SCREENSHOT"
 
 
 class ManualActivityDraft(TimestampMixin, Base):
@@ -183,10 +192,20 @@ class ManualActivityDraft(TimestampMixin, Base):
         Enum(ManualDraftStatus, native_enum=False, create_constraint=True, length=16),
         default=ManualDraftStatus.ACTIVE,
     )
+    input_method: Mapped[DraftInputMethod] = mapped_column(
+        Enum(DraftInputMethod, native_enum=False, create_constraint=True, length=16),
+        default=DraftInputMethod.STEPS,
+    )
+    source_type: Mapped[SourceType] = mapped_column(
+        Enum(SourceType, native_enum=False, create_constraint=True, length=32),
+        default=SourceType.MANUAL,
+    )
     distance_m: Mapped[int | None] = mapped_column(Integer)
     elapsed_time_sec: Mapped[int | None] = mapped_column(Integer)
     moving_time_sec: Mapped[int | None] = mapped_column(Integer)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    date_confirmed: Mapped[bool] = mapped_column(Boolean, default=True)
+    start_time_known: Mapped[bool] = mapped_column(Boolean, default=True)
     timezone: Mapped[str] = mapped_column(String(64))
     avg_hr: Mapped[int | None] = mapped_column(Integer)
     max_hr: Mapped[int | None] = mapped_column(Integer)
@@ -195,6 +214,10 @@ class ManualActivityDraft(TimestampMixin, Base):
     title: Mapped[str | None] = mapped_column(String(255))
     pending_field: Mapped[str | None] = mapped_column(String(32))
     telegram_message_id: Mapped[int | None] = mapped_column(Integer)
+    input_sha256: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str | None] = mapped_column(String(32))
+    provider_model: Mapped[str | None] = mapped_column(String(128))
+    provider_request_id: Mapped[str | None] = mapped_column(String(128))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     activity_id: Mapped[uuid.UUID | None] = mapped_column(
