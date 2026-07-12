@@ -186,3 +186,63 @@
   один серверный ключ и allowlist подходят закрытой beta, но raw fitness screenshot
   требует отдельного согласия, ограничений расходов и data minimization. Provider
   abstraction сохраняет заменяемость OpenAI без преждевременного микросервиса.
+
+## ADR-015 — adaptive `/next` и versioned deterministic pipeline
+
+- Дата: 2026-07-12
+- Статус: принято
+- Решение: `/next` использует активную `RunningGoal`, immutable confirmed readiness и всю
+  non-deleted RUN history через versioned recency-weighted pipeline
+  `quality -> features -> state -> candidates -> safety -> scoring -> prescription`.
+  Hard safety применяется до scoring; LLM не получает историю и не рассчитывает
+  тренировку. Старая coach-v2 ветка заменяется, `/run` остаётся отдельным use case, а
+  historical `TrainingPlan`/`PlannedWorkout` сохраняются без runtime dependency.
+- Причина: одинаковые typed inputs и config должны воспроизводимо давать одну безопасную
+  следующую пробежку, а цель не должна обходить ограничения самочувствия, перерыва и
+  качества данных.
+
+## ADR-016 — immutable reports и operational recommendation revisions
+
+- Дата: 2026-07-12
+- Статус: принято
+- Решение: каждый расчёт создаёт immutable `CoachReport` и новую
+  `NextRunRecommendation` revision. На пользователя существует не больше одной current
+  revision в `PROVISIONAL`/`CONFIRMED`; предыдущая строка переводится в terminal status и
+  связывается через `supersedes_id`. Confirm callback идемпотентен. Goal/readiness changes
+  supersede current, expiry закрывает её через 72 часа после `not_before`, новая
+  фактическая RUN после creation потребляет recommendation, а chronological backfill
+  только supersede-ит её. Три Activity writer используют общий lifecycle collaborator в
+  существующей транзакции.
+- Причина: audit snapshot нельзя перезаписывать, но operational состояние должно
+  атомарно переживать callback retry, import retry, backfill и несколько путей записи
+  Activity.
+
+## ADR-017 — unified AI registry, external access и consent v2
+
+- Дата: 2026-07-12
+- Статус: принято
+- Решение: Activity extraction, readiness extraction и voice transcription используют
+  единый task-aware `app/ai` registry/router. Единственный production provider MVP 1.0 —
+  OpenAI с model per task; extension seam проверяется in-memory provider contract.
+  `AssistedAccess` становится общим `ExternalAiAccess`: owner ALLOWED/REVOKED сохраняется,
+  но пользователь повторно принимает consent v2 для wellbeing, sleep, fatigue, pain и
+  voice. Text/image/audio/transcript обрабатываются ephemeral; audit хранит только hash,
+  task/provider/model/status и timestamps. Historical provider metadata сохраняется, а
+  runtime wording path и конкурирующие provider settings удаляются.
+- Причина: application services не должны зависеть от vendor SDK или иметь несколько
+  способов настройки одной интеграции; чувствительные raw inputs требуют общего
+  data-minimized consent/access gate перед каждым external call.
+
+## ADR-018 — optional Health Connect sleep summary
+
+- Дата: 2026-07-12
+- Статус: принято
+- Решение: companion может отдельно синхронизировать bounded `SleepSessionRecord` как
+  typed `SleepSummary` без stages/raw payload. `READ_SLEEP` optional и не влияет на RUN
+  sync readiness. Backend идемпотентен по device/external ID и предлагает longest
+  plausible session, завершившуюся не более 36 часов назад. Значения участвуют в engine
+  только после editable preview и confirmed check-in; manual override имеет приоритет,
+  а quality не выводится из duration или stages.
+- Причина: Health Connect sleep может сократить ручной ввод, но permission, свежесть и
+  доступность данных различаются между устройствами и не должны блокировать `/next` или
+  создавать скрытую оценку восстановления.
