@@ -19,11 +19,13 @@ from app.coach.provider import (
 )
 from app.coach.service import CoachService
 from app.core.config import Settings
+from app.goals.service import GoalService
 from app.groups.monthly_service import MonthlyReportService
 from app.groups.service import GroupService
 from app.health_connect.outbox import TelegramOutboxService
 from app.health_connect.service import HealthConnectService
 from app.ingestion.service import ImportService
+from app.readiness.service import ReadinessService
 from app.storage.service import LocalFilesystemStorage
 from app.users.service import UserService
 
@@ -39,6 +41,8 @@ class AppServices:
     coach: CoachService
     monthly: MonthlyReportService
     assisted: AssistedActivityService
+    goals: GoalService
+    readiness: ReadinessService
 
 
 def build_services(
@@ -134,4 +138,6 @@ def build_services(
         coach=coach,
         monthly=MonthlyReportService(session_factory),
         assisted=assisted,
+        goals=GoalService(session_factory),
+        readiness=ReadinessService(session_factory),
     )

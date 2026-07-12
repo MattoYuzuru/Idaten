@@ -3,25 +3,9 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from enum import IntEnum
 from zoneinfo import ZoneInfo
 
-
-class StandardDistance(IntEnum):
-    FIVE_K = 5_000
-    TEN_K = 10_000
-    HALF_MARATHON = 21_097
-
-    @property
-    def label(self) -> str:
-        return {
-            StandardDistance.FIVE_K: "5 км",
-            StandardDistance.TEN_K: "10 км",
-            StandardDistance.HALF_MARATHON: "Полумарафон",
-        }[self]
-
-
-STANDARD_DISTANCES = tuple(StandardDistance)
+from app.activities.standards import STANDARD_DISTANCES, StandardDistance, is_actual_distance
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,9 +129,9 @@ def select_personal_records(candidates: tuple[ResultCandidate, ...]) -> Personal
     results: list[DistanceResult] = []
     for distance in STANDARD_DISTANCES:
         target = int(distance)
-        lower = target * 98 // 100
-        upper = target * 102 // 100
-        actual_candidates = tuple(item for item in candidates if lower <= item.distance_m <= upper)
+        actual_candidates = tuple(
+            item for item in candidates if is_actual_distance(item.distance_m, distance)
+        )
         actual = min(
             actual_candidates,
             key=lambda item: (
