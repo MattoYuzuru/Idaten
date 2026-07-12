@@ -9,6 +9,7 @@ import androidx.health.connect.client.records.ExerciseRoute
 import androidx.health.connect.client.records.ExerciseRouteResult
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.SpeedRecord
 import androidx.health.connect.client.records.StepsCadenceRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
@@ -18,6 +19,7 @@ import dev.idaten.companion.model.HealthRunSearchResult
 import dev.idaten.companion.model.HealthSample
 import dev.idaten.companion.model.PermissionState
 import dev.idaten.companion.model.RawHealthRun
+import dev.idaten.companion.model.RawHealthSleep
 import dev.idaten.companion.model.RunSkipReason
 import java.time.Duration
 import java.time.Instant
@@ -33,6 +35,8 @@ interface HealthConnectSource {
 
     suspend fun latestRuns(limit: Int = DEFAULT_RUN_LIMIT): HealthRunSearchResult
 
+    suspend fun latestSleep(): RawHealthSleep? = null
+
     fun withRoute(
         run: RawHealthRun,
         route: ExerciseRoute,
@@ -43,6 +47,7 @@ const val DEFAULT_RUN_LIMIT = 20
 internal const val HEALTH_PAGE_SIZE = 20
 internal const val MAX_HEALTH_PAGES = 10
 internal const val HEALTH_LOOKBACK_DAYS = 180L
+internal const val SLEEP_LOOKBACK_DAYS = 7L
 
 internal data class SessionPage<T>(
     val records: List<T>,
@@ -101,6 +106,7 @@ class AndroidHealthConnectSource(
         )
     override val routePermission: String = "android.permission.health.READ_EXERCISE_ROUTES"
     private val cadencePermission = HealthPermission.getReadPermission(StepsCadenceRecord::class)
+    private val sleepPermission = HealthPermission.getReadPermission(SleepSessionRecord::class)
 
     private val client: HealthConnectClient
         get() = HealthConnectClient.getOrCreate(context)
@@ -118,7 +124,36 @@ class AndroidHealthConnectSource(
             granted = granted,
             required = basePermissions,
             routeGranted = routePermission in granted,
+            sleepPermission = sleepPermission,
         )
+    }
+
+    override suspend fun latestSleep(): RawHealthSleep? {
+        val state = permissionState()
+        if (!state.sleepGranted) return null
+        val now = Instant.now()
+        val from = now.minus(Duration.ofDays(SLEEP_LOOKBACK_DAYS))
+        val response =
+            client.readRecords(
+                ReadRecordsRequest(
+                    recordType = SleepSessionRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(from, now),
+                    ascendingOrder = false,
+                    pageSize = HEALTH_PAGE_SIZE,
+                ),
+            )
+        val candidates =
+            response.records.map { sleep ->
+                RawHealthSleep(
+                    externalId = sleep.metadata.id,
+                    startedAt = sleep.startTime.toString(),
+                    endedAt = sleep.endTime.toString(),
+                    durationSeconds = Duration.between(sleep.startTime, sleep.endTime).seconds,
+                    dataOrigin = sleep.metadata.dataOrigin.packageName,
+                    observedAt = now.toString(),
+                )
+            }
+        return selectLongestPlausibleSleep(candidates, now)
     }
 
     override suspend fun latestRuns(limit: Int): HealthRunSearchResult {
@@ -279,3 +314,22 @@ class AndroidHealthConnectSource(
             )
         }
 }
+
+internal fun selectLongestPlausibleSleep(
+    records: List<RawHealthSleep>,
+    now: Instant,
+): RawHealthSleep? =
+    records
+        .filter { record ->
+            val endedAt = runCatching { record.endedAt?.let(Instant::parse) }.getOrNull()
+            val duration = record.durationSeconds
+            endedAt != null &&
+                duration != null &&
+                duration in 1..86_400 &&
+                !endedAt.isAfter(now) &&
+                !endedAt.isBefore(now.minus(Duration.ofHours(36)))
+        }.maxWithOrNull(
+            compareBy<RawHealthSleep> { it.durationSeconds ?: 0 }
+                .thenBy { it.endedAt.orEmpty() }
+                .thenBy { it.externalId },
+        )

@@ -10,6 +10,7 @@ import dev.idaten.companion.data.DeviceStatusResponse
 import dev.idaten.companion.data.SyncRequest
 import dev.idaten.companion.health.HealthConnectSource
 import dev.idaten.companion.health.HealthOnboardingState
+import dev.idaten.companion.model.HealthAvailability
 import dev.idaten.companion.model.HealthConnectMapper
 import dev.idaten.companion.model.PermissionState
 import dev.idaten.companion.model.RunItem
@@ -32,6 +33,7 @@ data class MainUiState(
     val runSearchSummary: RunSearchSummary? = null,
     val loadingRuns: Boolean = false,
     val syncing: Boolean = false,
+    val syncingSleep: Boolean = false,
     val permissionRequestInFlight: Boolean = false,
     val providerActionInFlight: Boolean = false,
     val healthMessage: String? = null,
@@ -115,6 +117,20 @@ class MainViewModel(
         return permissions
     }
 
+    fun requestSleepPermission(): Set<String>? {
+        val current = state.value
+        val permission = current.permissionState?.sleepPermission ?: return null
+        if (
+            current.permissionRequestInFlight ||
+            current.permissionState.sleepGranted ||
+            current.permissionState.healthConnect != HealthAvailability.AVAILABLE
+        ) {
+            return null
+        }
+        mutableState.value = current.copy(permissionRequestInFlight = true, healthMessage = null)
+        return setOf(permission)
+    }
+
     fun onPermissionResult(granted: Set<String>) {
         val previous =
             state.value.permissionState
@@ -123,7 +139,7 @@ class MainViewModel(
                     refreshHealth()
                     return
                 }
-        val permissionState = previous.copy(granted = granted)
+        val permissionState = previous.copy(granted = previous.granted + granted)
         mutableState.value =
             state.value.copy(
                 permissionRequestInFlight = false,
@@ -296,6 +312,38 @@ class MainViewModel(
                 refreshStatus()
             }.onFailure { error ->
                 mutableState.value = state.value.copy(syncing = false, backendMessage = safeMessage(error))
+            }
+        }
+
+    fun syncSleep() =
+        viewModelScope.launch {
+            val current = state.value
+            if (!current.linked) {
+                mutableState.value = current.copy(backendMessage = "Сначала привяжите устройство")
+                return@launch
+            }
+            if (current.permissionState?.sleepGranted != true) {
+                mutableState.value = current.copy(healthMessage = "Доступ ко сну не предоставлен; пробежки по-прежнему доступны")
+                return@launch
+            }
+            mutableState.value = current.copy(syncingSleep = true, backendMessage = null)
+            runCatching {
+                val sleep = health.latestSleep() ?: return@runCatching null
+                val request = mapper.mapSleep(sleep) ?: return@runCatching null
+                devices.syncSleep(request)
+            }.onSuccess { result ->
+                mutableState.value =
+                    state.value.copy(
+                        syncingSleep = false,
+                        backendMessage =
+                            if (result == null) {
+                                "Свежая завершённая запись сна за последние 36 часов не найдена"
+                            } else {
+                                "Сон синхронизирован. В /next его можно проверить, изменить или удалить."
+                            },
+                    )
+            }.onFailure { error ->
+                mutableState.value = state.value.copy(syncingSleep = false, backendMessage = safeMessage(error))
             }
         }
 

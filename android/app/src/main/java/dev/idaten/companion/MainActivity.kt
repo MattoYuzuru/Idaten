@@ -40,6 +40,7 @@ import androidx.health.connect.client.records.ElevationGainedRecord
 import androidx.health.connect.client.records.ExerciseRoute
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.SpeedRecord
 import androidx.health.connect.client.records.StepsCadenceRecord
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -94,6 +95,9 @@ class MainActivity : ComponentActivity() {
                     requestPermissions = {
                         viewModel.requestBasePermissions()?.let(permissionLauncher::launch)
                     },
+                    requestSleepPermission = {
+                        viewModel.requestSleepPermission()?.let(permissionLauncher::launch)
+                    },
                     openProvider = ::openHealthConnect,
                     requestRoute = { recordId ->
                         routeRecordId = recordId
@@ -129,6 +133,7 @@ private enum class Screen { LINK, STATUS, RUNS }
 fun idatenApp(
     viewModel: MainViewModel,
     requestPermissions: () -> Unit,
+    requestSleepPermission: () -> Unit,
     openProvider: () -> Unit,
     requestRoute: (String) -> Unit,
 ) {
@@ -150,8 +155,10 @@ fun idatenApp(
                     statusScreen(
                         state,
                         requestPermissions,
+                        requestSleepPermission,
                         openProvider,
                         viewModel::refreshBackendAndHealth,
+                        viewModel::syncSleep,
                     )
                 Screen.RUNS ->
                     runsScreen(
@@ -200,8 +207,10 @@ private fun linkScreen(
 private fun statusScreen(
     state: MainUiState,
     requestPermissions: () -> Unit,
+    requestSleepPermission: () -> Unit,
     openProvider: () -> Unit,
     refresh: () -> Unit,
+    syncSleep: () -> Unit,
 ) {
     Text("Статус", style = MaterialTheme.typography.headlineSmall)
     Text(if (state.linked) "Устройство привязано" else "Устройство не привязано")
@@ -254,6 +263,30 @@ private fun statusScreen(
         }
         HealthOnboardingState.READY -> Text("Health Connect готов к чтению пробежек")
     }
+    Text(
+        if (state.permissionState?.sleepGranted == true) {
+            "Optional-доступ ко сну предоставлен. Синхронизация запускается только вручную."
+        } else {
+            "Сон необязателен: отказ не блокирует пробежки или /next. При желании можно передать только summary без stages."
+        },
+    )
+    if (state.permissionState?.sleepGranted == true) {
+        Button(
+            onClick = syncSleep,
+            enabled = state.linked && !state.syncingSleep,
+            modifier = Modifier.semantics { contentDescription = "Синхронизировать последнюю запись сна" },
+        ) {
+            Text(if (state.syncingSleep) "Синхронизация сна…" else "Синхронизировать сон")
+        }
+    } else if (state.permissionState?.sleepPermission != null) {
+        Button(
+            onClick = requestSleepPermission,
+            enabled = !state.permissionRequestInFlight,
+            modifier = Modifier.semantics { contentDescription = "Запросить необязательный доступ ко сну" },
+        ) {
+            Text("Разрешить чтение сна (необязательно)")
+        }
+    }
     Button(
         onClick = refresh,
         modifier = Modifier.semantics { contentDescription = "Обновить статус backend и Health Connect" },
@@ -270,6 +303,7 @@ private fun healthPermissionLabel(permission: String): String =
         HealthPermission.getReadPermission(SpeedRecord::class) -> "скорость"
         HealthPermission.getReadPermission(StepsCadenceRecord::class) -> "каденс"
         HealthPermission.getReadPermission(ElevationGainedRecord::class) -> "набор высоты"
+        HealthPermission.getReadPermission(SleepSessionRecord::class) -> "сон (необязательно)"
         else -> permission.substringAfterLast('.')
     }
 

@@ -2,6 +2,7 @@ package dev.idaten.companion.data
 
 import android.content.Context
 import android.os.Build
+import dev.idaten.companion.model.SyncSleepDto
 import java.util.UUID
 
 class DeviceRepository(
@@ -31,6 +32,8 @@ class DeviceRepository(
     suspend fun status(): DeviceStatusResponse = api.status(requireToken())
 
     suspend fun sync(request: SyncRequest): SyncResponse = api.sync(requireToken(), request)
+
+    suspend fun syncSleep(request: SyncSleepDto): SleepSyncResponse = api.syncSleep(requireToken(), request)
 
     fun beginSyncBatch(): String = syncBatchStore.read() ?: UUID.randomUUID().toString().also(syncBatchStore::write)
 

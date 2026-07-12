@@ -72,4 +72,23 @@ class HealthConnectOnboardingTest {
         assertEquals(emptySet<String>(), state.missingBasePermissions)
         assertEquals(dev.idaten.companion.health.HealthOnboardingState.READY, state.onboardingState)
     }
+
+    @Test
+    fun optionalSleepPermissionDoesNotBlockReadyState() {
+        val required = setOf("exercise", "distance", "heart_rate", "speed", "elevation")
+        val denied =
+            PermissionState(
+                healthConnect = HealthAvailability.AVAILABLE,
+                granted = required,
+                required = required,
+                routeGranted = false,
+                sleepPermission = "sleep",
+            )
+        val granted = denied.copy(granted = required + "sleep")
+
+        assertEquals(dev.idaten.companion.health.HealthOnboardingState.READY, denied.onboardingState)
+        assertEquals(false, denied.sleepGranted)
+        assertEquals(dev.idaten.companion.health.HealthOnboardingState.READY, granted.onboardingState)
+        assertEquals(true, granted.sleepGranted)
+    }
 }

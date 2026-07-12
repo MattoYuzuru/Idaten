@@ -8,8 +8,10 @@ import dev.idaten.companion.data.InMemorySyncBatchStore
 import dev.idaten.companion.data.InMemoryTokenStore
 import dev.idaten.companion.data.LinkCompleteRequest
 import dev.idaten.companion.data.LinkCompleteResponse
+import dev.idaten.companion.data.SleepSyncResponse
 import dev.idaten.companion.data.SyncRequest
 import dev.idaten.companion.data.SyncResponse
+import dev.idaten.companion.model.SyncSleepDto
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -85,5 +87,10 @@ class DeviceRepositoryTest {
             token: String,
             request: SyncRequest,
         ) = SyncResponse(null, emptyList())
+
+        override suspend fun syncSleep(
+            token: String,
+            request: SyncSleepDto,
+        ) = SleepSyncResponse("sleep", true)
     }
 }

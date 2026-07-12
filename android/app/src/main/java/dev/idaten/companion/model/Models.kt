@@ -43,6 +43,15 @@ data class HealthRunSearchResult(
     val olderRecordsExist: Boolean,
 )
 
+data class RawHealthSleep(
+    val externalId: String,
+    val startedAt: String? = null,
+    val endedAt: String? = null,
+    val durationSeconds: Long? = null,
+    val dataOrigin: String? = null,
+    val observedAt: String? = null,
+)
+
 @Serializable
 data class SyncSampleDto(
     val timestamp: String,
@@ -65,6 +74,17 @@ data class SyncActivityDto(
     @SerialName("avg_hr") val averageHeartRate: Int? = null,
     @SerialName("max_hr") val maximumHeartRate: Int? = null,
     val samples: List<SyncSampleDto> = emptyList(),
+)
+
+@Serializable
+data class SyncSleepDto(
+    @SerialName("external_id") val externalId: String,
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("ended_at") val endedAt: String? = null,
+    @SerialName("duration_sec") val durationSeconds: Int? = null,
+    @SerialName("sleep_quality") val sleepQuality: Int? = null,
+    @SerialName("data_origin") val dataOrigin: String? = null,
+    @SerialName("observed_at") val observedAt: String? = null,
 )
 
 sealed interface RunMappingResult {
@@ -117,6 +137,19 @@ class HealthConnectMapper {
             ),
         )
     }
+
+    fun mapSleep(sleep: RawHealthSleep): SyncSleepDto? {
+        val duration = sleep.durationSeconds
+        if (duration != null && duration !in 1..86_400) return null
+        return SyncSleepDto(
+            externalId = sleep.externalId,
+            startedAt = sleep.startedAt,
+            endedAt = sleep.endedAt,
+            durationSeconds = duration?.toInt(),
+            dataOrigin = sleep.dataOrigin,
+            observedAt = sleep.observedAt,
+        )
+    }
 }
 
 enum class HealthAvailability { AVAILABLE, UPDATE_REQUIRED, UNAVAILABLE }
@@ -126,11 +159,13 @@ data class PermissionState(
     val granted: Set<String>,
     val required: Set<String>,
     val routeGranted: Boolean,
+    val sleepPermission: String? = null,
 ) {
     val grantedBasePermissions: Set<String> = required.intersect(granted)
     val missingBasePermissions: Set<String> = required - granted
     val baseGranted: Boolean = healthConnect == HealthAvailability.AVAILABLE && granted.containsAll(required)
     val canReadRoute: Boolean = baseGranted && routeGranted
+    val sleepGranted: Boolean = sleepPermission != null && sleepPermission in granted
     val onboardingState: HealthOnboardingState =
         when (healthConnect) {
             HealthAvailability.AVAILABLE ->
