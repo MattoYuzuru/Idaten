@@ -87,8 +87,9 @@ recency-weighted истории, active goal, confirmed readiness, safety filter
 scoring и continuous prescription. Добавляет provisional/pre-run lifecycle, optional
 editable Health Connect sleep prefill и единый AI task registry только для typed input.
 
-Спецификация пока ожидает подтверждения четырёх продуктовых defaults; реализация не
-начинается до decision freeze и новых ADR.
+Спецификация одобрена для реализации: обязательные readiness/safety defaults, полностью
+optional sleep, consent v2 и OpenAI-only provider scope зафиксированы. Следующий агент
+сначала добавляет новые ADR, затем выполняет vertical slices.
 
 Подробности: [mvp-1.0.md](iterations/mvp-1.0.md).
 
