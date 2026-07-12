@@ -4,12 +4,12 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.readiness.models import (
+from app.readiness.domain import (
     CheckInInputSource,
     CheckInPhase,
     CheckInStatus,
-    ReadinessCheckIn,
 )
+from app.readiness.models import ReadinessCheckIn
 from app.readiness.repository import ReadinessRepository
 from app.readiness.schemas import ReadinessDraft, ReadinessError, ReadinessValues
 from app.users.models import User

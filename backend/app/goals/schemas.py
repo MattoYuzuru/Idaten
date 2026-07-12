@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from app.goals.models import RunningGoalStatus, RunningGoalType
+from app.goals.domain import RunningGoalStatus, RunningGoalType
 
 
 class GoalError(ValueError):

@@ -1,27 +1,11 @@
 import uuid
 from datetime import date, datetime
-from enum import StrEnum
 
 from sqlalchemy import CheckConstraint, Date, DateTime, Enum, ForeignKey, Index, Integer, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
-
-
-class RunningGoalType(StrEnum):
-    FIRST_5K = "FIRST_5K"
-    FIRST_10K = "FIRST_10K"
-    FIRST_HALF = "FIRST_HALF"
-    FIRST_MARATHON = "FIRST_MARATHON"
-    IMPROVE_HALF = "IMPROVE_HALF"
-    IMPROVE_MARATHON = "IMPROVE_MARATHON"
-    GENERAL_ENDURANCE = "GENERAL_ENDURANCE"
-
-
-class RunningGoalStatus(StrEnum):
-    ACTIVE = "ACTIVE"
-    COMPLETED = "COMPLETED"
-    CANCELLED = "CANCELLED"
+from app.goals.domain import RunningGoalStatus, RunningGoalType
 
 
 class RunningGoal(TimestampMixin, Base):

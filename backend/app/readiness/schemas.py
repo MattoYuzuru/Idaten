@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.readiness.models import CheckInInputSource, CheckInPhase, CheckInStatus
+from app.readiness.domain import CheckInInputSource, CheckInPhase, CheckInStatus
 
 
 class ReadinessError(ValueError):

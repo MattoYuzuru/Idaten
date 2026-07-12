@@ -9,9 +9,11 @@ from sqlalchemy.pool import StaticPool
 from app.activities.schemas import ManualRunInput
 from app.core.config import Settings
 from app.db.base import Base
-from app.goals.models import RunningGoal, RunningGoalStatus, RunningGoalType
+from app.goals.domain import RunningGoalStatus, RunningGoalType
+from app.goals.models import RunningGoal
 from app.goals.schemas import GoalError
-from app.readiness.models import CheckInPhase, CheckInStatus, ReadinessCheckIn
+from app.readiness.domain import CheckInPhase, CheckInStatus
+from app.readiness.models import ReadinessCheckIn
 from app.readiness.schemas import ReadinessError, ReadinessValues
 from app.services import AppServices, build_services
 from app.users.schemas import TelegramIdentity

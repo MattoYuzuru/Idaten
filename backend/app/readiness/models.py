@@ -1,6 +1,5 @@
 import uuid
 from datetime import datetime
-from enum import StrEnum
 
 from sqlalchemy import (
     BigInteger,
@@ -19,26 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
-
-
-class CheckInPhase(StrEnum):
-    POST_RUN = "POST_RUN"
-    PRE_RUN = "PRE_RUN"
-
-
-class CheckInStatus(StrEnum):
-    DRAFT = "DRAFT"
-    CONFIRMED = "CONFIRMED"
-    CANCELLED = "CANCELLED"
-    EXPIRED = "EXPIRED"
-
-
-class CheckInInputSource(StrEnum):
-    MANUAL = "MANUAL"
-    AI_TEXT = "AI_TEXT"
-    AI_VOICE = "AI_VOICE"
-    HEALTH_CONNECT = "HEALTH_CONNECT"
-    MERGED = "MERGED"
+from app.readiness.domain import CheckInInputSource, CheckInPhase, CheckInStatus
 
 
 class ReadinessCheckIn(TimestampMixin, Base):

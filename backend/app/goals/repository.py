@@ -3,7 +3,8 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.goals.models import RunningGoal, RunningGoalStatus
+from app.goals.domain import RunningGoalStatus
+from app.goals.models import RunningGoal
 
 
 class GoalRepository:

@@ -5,25 +5,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.activities.repository import ActivityRepository
 from app.activities.schemas import RunHistoryItem
-from app.activities.standards import StandardDistance, is_actual_distance, proves_finish
-from app.goals.models import RunningGoal, RunningGoalStatus, RunningGoalType
+from app.activities.standards import is_actual_distance, proves_finish
+from app.goals.domain import (
+    GOAL_DISTANCES,
+    IMPROVEMENT_GOALS,
+    RunningGoalStatus,
+    RunningGoalType,
+)
+from app.goals.models import RunningGoal
 from app.goals.repository import GoalRepository
 from app.goals.schemas import GoalAchievement, GoalError, RunningGoalDto
 from app.users.models import User
 from app.users.repository import UserRepository
-
-GOAL_DISTANCES: dict[RunningGoalType, StandardDistance] = {
-    RunningGoalType.FIRST_5K: StandardDistance.FIVE_K,
-    RunningGoalType.FIRST_10K: StandardDistance.TEN_K,
-    RunningGoalType.FIRST_HALF: StandardDistance.HALF_MARATHON,
-    RunningGoalType.FIRST_MARATHON: StandardDistance.MARATHON,
-    RunningGoalType.IMPROVE_HALF: StandardDistance.HALF_MARATHON,
-    RunningGoalType.IMPROVE_MARATHON: StandardDistance.MARATHON,
-}
-IMPROVEMENT_GOALS = {
-    RunningGoalType.IMPROVE_HALF,
-    RunningGoalType.IMPROVE_MARATHON,
-}
 
 
 class GoalService:

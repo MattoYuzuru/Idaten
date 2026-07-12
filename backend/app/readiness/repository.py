@@ -3,7 +3,8 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.readiness.models import CheckInPhase, CheckInStatus, ReadinessCheckIn
+from app.readiness.domain import CheckInPhase, CheckInStatus
+from app.readiness.models import ReadinessCheckIn
 
 
 class ReadinessRepository:
