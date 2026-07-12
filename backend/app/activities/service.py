@@ -41,6 +41,7 @@ from app.analytics.personal import (
     progress_bounds,
     select_personal_records,
 )
+from app.coach.lifecycle import RecommendationLifecycle
 from app.coach.report_builder import build_after_run_report
 from app.ingestion.adapters.manual import ManualAdapter
 from app.ingestion.schemas import validate_normalized
@@ -55,9 +56,11 @@ class ActivityService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         user_service: UserService,
+        recommendation_lifecycle: RecommendationLifecycle | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.user_service = user_service
+        self.recommendation_lifecycle = recommendation_lifecycle or RecommendationLifecycle()
 
     async def record_manual_run(
         self,
@@ -343,6 +346,7 @@ class ActivityService:
         )
         repository.add(activity)
         await session.flush()
+        await self.recommendation_lifecycle.activity_recorded(session, user.id, activity)
         summary = ActivitySummary(
             activity.id,
             activity.distance_m,

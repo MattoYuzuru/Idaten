@@ -56,9 +56,10 @@ class ReadinessCheckIn(TimestampMixin, Base):
             "(pain_present = false AND pain_severity IS NULL AND pain_location IS NULL "
             "AND pain_affects_movement IS NULL AND pain_is_new IS NULL "
             "AND pain_is_worsening IS NULL) OR "
-            "(pain_present = true AND pain_severity IS NOT NULL AND pain_location IS NOT NULL "
+            "(pain_present = true AND (status != 'CONFIRMED' OR "
+            "(pain_severity IS NOT NULL AND pain_location IS NOT NULL "
             "AND pain_affects_movement IS NOT NULL AND pain_is_new IS NOT NULL "
-            "AND pain_is_worsening IS NOT NULL))",
+            "AND pain_is_worsening IS NOT NULL))))",
             name="pain_fields_consistent",
         ),
         CheckConstraint(

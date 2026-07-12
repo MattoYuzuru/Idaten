@@ -38,6 +38,7 @@ from app.bot.messages import (
     format_run_history,
     format_stats,
 )
+from app.bot.next_keyboards import after_run_keyboard
 from app.coach.schemas import CoachError
 from app.groups.schemas import GroupError, PrivacyGroupAction, PrivacyOverview, ShareTarget
 from app.health_connect.schemas import HealthConnectError
@@ -149,7 +150,7 @@ async def _send_run_result(
     *,
     telegram_user_id: int | None = None,
 ) -> None:
-    await message.answer(result.report_message)
+    await message.answer(result.report_message, reply_markup=after_run_keyboard())
     targets = await services.groups.share_targets(
         telegram_user_id or identity_from_message(message).telegram_user_id,
         result.activity.activity_id,

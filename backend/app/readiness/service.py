@@ -139,13 +139,7 @@ class ReadinessService:
                 return self._dto(check_in)
             if check_in.status != CheckInStatus.DRAFT:
                 raise ReadinessError("Черновик уже закрыт.")
-            values = self._values(check_in)
-            self._validate_values(values, check_in.phase, confirmed=True)
-            check_in.status = CheckInStatus.CONFIRMED
-            check_in.confirmed_at = now
-            check_in.pending_field = None
-            check_in.version += 1
-            return self._dto(check_in)
+            return self.confirm_locked(check_in, now)
 
     async def get(self, telegram_user_id: int, check_in_id: uuid.UUID) -> ReadinessDraft:
         async with self.session_factory() as session:
@@ -186,7 +180,11 @@ class ReadinessService:
             values.pain_is_new,
             values.pain_is_worsening,
         )
-        if values.pain_present is True and any(value is None for value in pain_details):
+        if (
+            confirmed
+            and values.pain_present is True
+            and any(value is None for value in pain_details)
+        ):
             raise ReadinessError("При боли заполните severity, location и уточняющие признаки.")
         if values.pain_present is False and any(value is not None for value in pain_details):
             raise ReadinessError("При отсутствии боли pain details должны быть очищены.")
@@ -254,6 +252,16 @@ class ReadinessService:
             check_in.version,
             check_in.telegram_message_id,
         )
+
+    @classmethod
+    def confirm_locked(cls, check_in: ReadinessCheckIn, moment: datetime) -> ReadinessDraft:
+        values = cls._values(check_in)
+        cls._validate_values(values, check_in.phase, confirmed=True)
+        check_in.status = CheckInStatus.CONFIRMED
+        check_in.confirmed_at = moment
+        check_in.pending_field = None
+        check_in.version += 1
+        return cls._dto(check_in)
 
     @staticmethod
     def _utc(value: datetime) -> datetime:

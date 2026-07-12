@@ -10,6 +10,8 @@ from app.assisted.provider import (
     OpenAIActivityExtractionProvider,
 )
 from app.assisted.service import AssistedActivityService
+from app.coach.adaptive_service import NextRunService
+from app.coach.lifecycle import RecommendationLifecycle
 from app.coach.provider import (
     JsonHttpWordingProvider,
     LLMProviderName,
@@ -43,6 +45,7 @@ class AppServices:
     assisted: AssistedActivityService
     goals: GoalService
     readiness: ReadinessService
+    next_run: NextRunService
 
 
 def build_services(
@@ -54,6 +57,7 @@ def build_services(
         default_locale=settings.default_locale,
     )
     storage = LocalFilesystemStorage(settings.storage_path)
+    recommendation_lifecycle = RecommendationLifecycle()
     health_connect = HealthConnectService(
         session_factory,
         users,
@@ -63,6 +67,7 @@ def build_services(
         link_attempt_limit=settings.health_connect_link_attempt_limit,
         link_attempt_window_seconds=settings.health_connect_link_attempt_window_seconds,
         max_batch_size=settings.health_connect_max_batch_size,
+        recommendation_lifecycle=recommendation_lifecycle,
     )
     provider_name = LLMProviderName(settings.llm_provider.upper())
     endpoints = {
@@ -122,7 +127,7 @@ def build_services(
     )
     return AppServices(
         users=users,
-        activities=ActivityService(session_factory, users),
+        activities=ActivityService(session_factory, users, recommendation_lifecycle),
         groups=GroupService(session_factory),
         imports=ImportService(
             session_factory,
@@ -132,6 +137,7 @@ def build_services(
             max_archive_uncompressed_bytes=settings.max_archive_uncompressed_bytes,
             max_archive_entries=settings.max_archive_entries,
             max_archive_ratio=settings.max_archive_ratio,
+            recommendation_lifecycle=recommendation_lifecycle,
         ),
         health_connect=health_connect,
         outbox=TelegramOutboxService(session_factory),
@@ -140,4 +146,5 @@ def build_services(
         assisted=assisted,
         goals=GoalService(session_factory),
         readiness=ReadinessService(session_factory),
+        next_run=NextRunService(session_factory),
     )

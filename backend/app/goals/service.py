@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.activities.repository import ActivityRepository
 from app.activities.schemas import RunHistoryItem
 from app.activities.standards import is_actual_distance, proves_finish
+from app.coach.lifecycle import RecommendationLifecycle
 from app.goals.domain import (
     GOAL_DISTANCES,
     IMPROVEMENT_GOALS,
@@ -52,6 +53,7 @@ class GoalService:
             current = await repository.active(user.id, for_update=True)
             if current is not None:
                 current.status = RunningGoalStatus.CANCELLED
+                await RecommendationLifecycle().supersede_current(session, user.id)
             goal = RunningGoal(
                 user_id=user.id,
                 type=goal_type,
@@ -97,6 +99,7 @@ class GoalService:
                 raise GoalError("В истории пока нет результата, подтверждающего эту цель.")
             goal.status = RunningGoalStatus.COMPLETED
             goal.completed_at = now
+            await RecommendationLifecycle().supersede_current(session, user.id)
             return self._dto(goal)
 
     @staticmethod

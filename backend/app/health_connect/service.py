@@ -19,6 +19,7 @@ from app.analytics.metrics import (
     format_local_week_period,
     local_week_bounds,
 )
+from app.coach.lifecycle import RecommendationLifecycle
 from app.coach.report_builder import build_after_run_report
 from app.ingestion.adapters.track import build_splits
 from app.ingestion.models import ActivitySeries, ActivitySplit
@@ -63,6 +64,7 @@ class HealthConnectService:
         session_factory: async_sessionmaker[AsyncSession],
         user_service: UserService,
         storage: StorageService,
+        recommendation_lifecycle: RecommendationLifecycle | None = None,
         *,
         security_pepper: str | None,
         link_ttl_seconds: int,
@@ -73,6 +75,7 @@ class HealthConnectService:
         self.session_factory = session_factory
         self.user_service = user_service
         self.storage = storage
+        self.recommendation_lifecycle = recommendation_lifecycle or RecommendationLifecycle()
         self.security_pepper = security_pepper
         self.link_ttl_seconds = link_ttl_seconds
         self.link_attempt_limit = link_attempt_limit
@@ -445,6 +448,7 @@ class HealthConnectService:
                 )
                 activity_repository.add(activity)
                 await session.flush()
+                await self.recommendation_lifecycle.activity_recorded(session, user_id, activity)
                 for split in normalized.splits or build_splits(
                     normalized.distance_m, normalized.elapsed_time_sec
                 ):
