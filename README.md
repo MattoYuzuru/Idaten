@@ -16,6 +16,7 @@ Self-hosted Telegram-бот и backend для учета беговых трен
 - [Инструкция для следующего агента](docs/agent-handoff.md)
 - [Журнал решений](docs/decision-log.md)
 - [Спецификация MVP 0.9](docs/iterations/mvp-0.9.md)
+- [Draft спецификации MVP 1.0](docs/iterations/mvp-1.0.md)
 - [Спецификации следующих MVP](docs/iterations/)
 - [Локальный запуск](docs/deployment.md)
 

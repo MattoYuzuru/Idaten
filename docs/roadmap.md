@@ -64,8 +64,36 @@ OCR/screenshots, Samsung ZIP, Mini App и background sync в итерацию н
 
 Подробности: [mvp-0.7.md](iterations/mvp-0.7.md).
 
-## После MVP 0.7
+## MVP 0.8 — assisted activity input
 
-Отдельно оцениваются: Strava private integration, screenshot OCR/vision, web dashboard,
-Samsung Health export adapter, background sync, Telegram Mini App, race search,
-S3/MinIO, Redis и observability stack. Они не должны заранее усложнять MVP.
+Добавляет consent-gated распознавание одной пробежки из текста или скриншота, persistent
+typed preview, owner allowlist, ephemeral media и общий duplicate policy. AI остаётся
+необязательным input adapter; Activity сохраняется только после подтверждения.
+
+Подробности: [mvp-0.8.md](iterations/mvp-0.8.md).
+
+## MVP 0.9 — personal progress и Telegram UX
+
+Объединяет текущую неделю, два 28-дневных окна и восьминедельный график в `/stats`,
+разделяет фактические результаты и pace estimates в `/pr`, упрощает private menu/privacy
+и делает консервативную `/next` хронологически устойчивой и объяснимой.
+
+Подробности: [mvp-0.9.md](iterations/mvp-0.9.md).
+
+## MVP 1.0 — Adaptive Next Run
+
+Заменяет три фиксированные ветки `/next` на versioned deterministic pipeline из полной
+recency-weighted истории, active goal, confirmed readiness, safety filters, candidates,
+scoring и continuous prescription. Добавляет provisional/pre-run lifecycle, optional
+editable Health Connect sleep prefill и единый AI task registry только для typed input.
+
+Спецификация пока ожидает подтверждения четырёх продуктовых defaults; реализация не
+начинается до decision freeze и новых ADR.
+
+Подробности: [mvp-1.0.md](iterations/mvp-1.0.md).
+
+## После MVP 1.0
+
+Отдельно оцениваются: Strava private integration, web dashboard, Samsung Health export
+adapter, background sync, Telegram Mini App, race search, S3/MinIO, Redis и observability
+stack. Они не должны заранее усложнять MVP 1.0.
