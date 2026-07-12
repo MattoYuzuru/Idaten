@@ -111,6 +111,42 @@ async def test_flow_requires_goal_then_check_in_and_repeat_is_read_only(
 
 
 @pytest.mark.asyncio
+async def test_explicit_recalculation_creates_one_idempotent_revision(
+    context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, factory = context
+    await services.activities.record_manual_run(
+        identity(), ManualRunInput(5_000, 1_800, NOW - timedelta(hours=1))
+    )
+    await services.goals.select(42, RunningGoalType.GENERAL_ENDURANCE, moment=NOW)
+    first = await create_recommendation(services)
+
+    recalculated = await services.next_run.recalculate(
+        42,
+        first.recommendation_id,
+        idempotency_key="recalc-callback",
+        moment=NOW + timedelta(minutes=1),
+    )
+    repeated = await services.next_run.recalculate(
+        42,
+        recalculated.recommendation_id,
+        idempotency_key="recalc-callback",
+        moment=NOW + timedelta(minutes=2),
+    )
+
+    assert repeated.recommendation_id == recalculated.recommendation_id
+    async with factory() as session:
+        revisions = tuple((await session.scalars(select(NextRunRecommendation))).all())
+    assert len(revisions) == 2
+    revisions_by_id = {item.id: item for item in revisions}
+    assert revisions_by_id[first.recommendation_id].status == RecommendationStatus.SUPERSEDED
+    assert (
+        revisions_by_id[recalculated.recommendation_id].status == RecommendationStatus.PROVISIONAL
+    )
+    assert revisions_by_id[recalculated.recommendation_id].supersedes_id == first.recommendation_id
+
+
+@pytest.mark.asyncio
 async def test_pre_run_creates_confirmed_revision_and_respects_provisional_bounds(
     context: tuple[AppServices, async_sessionmaker[AsyncSession]],
 ) -> None:
@@ -128,25 +164,21 @@ async def test_pre_run_creates_confirmed_revision_and_respects_provisional_bound
         key="pre-run-1",
     )
     async with factory() as session:
-        revisions = tuple(
-            (
-                await session.scalars(
-                    select(NextRunRecommendation).order_by(NextRunRecommendation.created_at)
-                )
-            ).all()
-        )
+        revisions = tuple((await session.scalars(select(NextRunRecommendation))).all())
         reports = {
             report.id: report for report in (await session.scalars(select(CoachReport))).all()
         }
-    assert [item.status for item in revisions] == [
-        RecommendationStatus.SUPERSEDED,
-        RecommendationStatus.CONFIRMED,
-    ]
-    assert revisions[1].supersedes_id == revisions[0].id
-    provisional_bounds = reports[revisions[0].report_id].rule_result_json["prescription"][
+    assert len(revisions) == 2
+    revisions_by_id = {item.id: item for item in revisions}
+    provisional_revision = revisions_by_id[provisional.recommendation_id]
+    confirmed_revision = revisions_by_id[confirmed.recommendation_id]
+    assert provisional_revision.status == RecommendationStatus.SUPERSEDED
+    assert confirmed_revision.status == RecommendationStatus.CONFIRMED
+    assert confirmed_revision.supersedes_id == provisional_revision.id
+    provisional_bounds = reports[provisional_revision.report_id].rule_result_json["prescription"][
         "safe_bounds"
     ]
-    confirmed_result = reports[revisions[1].report_id].rule_result_json["prescription"]
+    confirmed_result = reports[confirmed_revision.report_id].rule_result_json["prescription"]
     assert confirmed_result["duration_sec"] <= provisional_bounds["maximum_duration_sec"]
     if confirmed_result["distance_m"] is not None:
         assert confirmed_result["distance_m"] <= provisional_bounds["maximum_distance_m"]

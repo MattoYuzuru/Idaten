@@ -3,6 +3,8 @@ import uuid
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.goals.domain import RunningGoalType
+from app.readiness.domain import CheckInPhase
+from app.readiness.schemas import ReadinessDraft
 
 FIELD_CODES = {
     "overall_readiness": "o",
@@ -84,6 +86,23 @@ def check_in_method_keyboard(phase: str) -> InlineKeyboardMarkup:
                     text="Отправить голосом", callback_data=f"next:method:{phase}:voice"
                 ),
             ],
+        ]
+    )
+
+
+def ai_consent_keyboard(phase: str, method: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Согласен",
+                    callback_data=f"next:consent:yes:{phase}:{method}",
+                ),
+                InlineKeyboardButton(
+                    text="Не согласен",
+                    callback_data=f"next:consent:no:{phase}:{method}",
+                ),
+            ]
         ]
     )
 
@@ -189,7 +208,19 @@ def sleep_duration_keyboard(draft_id: uuid.UUID) -> InlineKeyboardMarkup:
     )
 
 
-def preview_keyboard(draft_id: uuid.UUID) -> InlineKeyboardMarkup:
+def preview_keyboard(draft: ReadinessDraft) -> InlineKeyboardMarkup:
+    draft_id = draft.check_in_id
+    editable_schedule = [
+        InlineKeyboardButton(
+            text="Доступное время", callback_data=_edit(draft_id, "available_time_sec")
+        )
+    ]
+    if draft.phase == CheckInPhase.POST_RUN and draft.linked_activity_id is not None:
+        editable_schedule.append(
+            InlineKeyboardButton(
+                text="RPE прошлой пробежки", callback_data=_edit(draft_id, "session_rpe")
+            )
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -221,6 +252,7 @@ def preview_keyboard(draft_id: uuid.UUID) -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(text="Мотивация", callback_data=_edit(draft_id, "motivation")),
             ],
+            editable_schedule,
             [
                 InlineKeyboardButton(
                     text="Очистить сон", callback_data=f"next:clear:{draft_id.hex}:sleep"
@@ -245,7 +277,14 @@ def recommendation_keyboard(recommendation_id: uuid.UUID) -> InlineKeyboardMarku
             ],
             [
                 InlineKeyboardButton(
-                    text="Пересчитать", callback_data=f"next:revise:{recommendation_id.hex}"
+                    text="Изменить доступное время",
+                    callback_data=f"next:change-time:{recommendation_id.hex}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Пересчитать",
+                    callback_data=f"next:recalc:{recommendation_id.hex}",
                 )
             ],
             [InlineKeyboardButton(text="Изменить цель", callback_data="next:change-goal")],

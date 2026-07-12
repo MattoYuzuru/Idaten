@@ -1,4 +1,5 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 from app.readiness.schemas import ReadinessValues
 
@@ -66,4 +67,25 @@ def assess_readiness(values: ReadinessValues) -> AthleteState:
         moderate_pain,
         values.external_load >= 8,
         tuple(reasons),
+    )
+
+
+def without_stale_sleep(values: ReadinessValues, *, as_of: datetime) -> ReadinessValues:
+    if values.sleep_ended_at is None:
+        return values
+    now = as_of if as_of.tzinfo is not None else as_of.replace(tzinfo=UTC)
+    ended = (
+        values.sleep_ended_at
+        if values.sleep_ended_at.tzinfo is not None
+        else values.sleep_ended_at.replace(tzinfo=UTC)
+    )
+    age = now.astimezone(UTC) - ended.astimezone(UTC)
+    if timedelta(0) <= age <= timedelta(hours=36):
+        return values
+    return replace(
+        values,
+        sleep_quality=None,
+        sleep_duration_sec=None,
+        sleep_ended_at=None,
+        sleep_summary_id=None,
     )

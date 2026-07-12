@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from html import escape
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.activities.models import CoachReport, ReportType, SourceType
+from app.activities.models import CoachReport, ReportType
 from app.activities.repository import ActivityRepository
-from app.analytics.metrics import format_duration, format_pace
+from app.analytics.metrics import format_pace
 from app.coach.domain import (
     CALCULATOR_VERSION,
     RULE_VERSION,
@@ -17,77 +16,24 @@ from app.coach.domain import (
     RunFact,
     WorkoutRecommendation,
     calculate_facts,
-    recommend_next,
     safe_weekly_targets,
 )
 from app.coach.models import PlannedWorkout, PlanStatus, TrainingGoal, TrainingPlan
-from app.coach.provider import ProviderExecutor, allowlisted_payload
 from app.coach.repository import CoachRepository
-from app.coach.schemas import CoachError, CoachResponse, PlanResponse, PlanWorkout, WeekResponse
+from app.coach.schemas import CoachError, PlanResponse, PlanWorkout, WeekResponse
 from app.users.models import User
 from app.users.repository import UserRepository
 
 
 class CoachService:
-    def __init__(
-        self,
-        session_factory: async_sessionmaker[AsyncSession],
-        provider_executor: ProviderExecutor,
-    ) -> None:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self.session_factory = session_factory
-        self.provider_executor = provider_executor
-
-    async def set_external_processing(self, telegram_user_id: int, *, enabled: bool) -> bool:
-        async with self.session_factory.begin() as session:
-            user = await self._require_user(session, telegram_user_id)
-            user.external_processing_enabled = enabled
-            return user.external_processing_enabled
 
     async def week(self, telegram_user_id: int, moment: datetime | None = None) -> WeekResponse:
         async with self.session_factory() as session:
             user = await self._require_user(session, telegram_user_id)
-            facts, _sources = await self._facts(session, user, moment or datetime.now(UTC))
+            facts = await self._facts(session, user, moment or datetime.now(UTC))
         return WeekResponse(facts=facts, message=format_week(facts))
-
-    async def next_workout(
-        self, telegram_user_id: int, moment: datetime | None = None
-    ) -> CoachResponse:
-        now = moment or datetime.now(UTC)
-        async with self.session_factory.begin() as session:
-            user = await self._require_user(session, telegram_user_id)
-            facts, sources = await self._facts(session, user, now)
-            recommendation = recommend_next(facts, as_of=now, timezone=user.timezone)
-            template = format_recommendation(recommendation)
-            report = CoachReport(
-                user_id=user.id,
-                report_type=ReportType.NEXT_WORKOUT,
-                facts_json=facts.as_json(),
-                rule_result_json=recommendation.as_json(),
-                message_private=template,
-                provider="NONE",
-            )
-            CoachRepository(session).add_report(report)
-            await session.flush()
-            report_id = report.id
-            external_allowed = user.external_processing_enabled and SourceType.STRAVA not in sources
-
-        message = template
-        provider_name = "NONE"
-        if external_allowed:
-            result = await self.provider_executor.execute(
-                allowlisted_payload(facts.as_json(), recommendation.as_json())
-            )
-            if result.message is not None:
-                message = f"{template}\n\n<b>Комментарий</b>\n{escape(result.message)}"
-                provider_name = result.provider.value
-                async with self.session_factory.begin() as session:
-                    stored = await CoachRepository(session).report(report_id)
-                    if stored is not None:
-                        stored.message_private = message
-                        stored.provider = result.provider.value
-                        stored.provider_model = result.model
-                        stored.prompt_hash = result.prompt_hash
-        return CoachResponse(report_id, facts, recommendation, message, provider_name)
 
     async def create_plan(
         self,
@@ -102,7 +48,7 @@ class CoachService:
             raise CoachError("Для CUSTOM укажите цель после названия.")
         async with self.session_factory.begin() as session:
             user = await self._require_user(session, telegram_user_id)
-            facts, _sources = await self._facts(session, user, now)
+            facts = await self._facts(session, user, now)
             starts_on = now.astimezone(ZoneInfo(user.timezone)).date()
             repository = CoachRepository(session)
             if await repository.plan_for_start(user.id, starts_on) is not None:
@@ -175,9 +121,7 @@ class CoachService:
                 plan.id, goal, facts.baseline_weekly_distance_m, tuple(workouts), message
             )
 
-    async def _facts(
-        self, session: AsyncSession, user: User, moment: datetime
-    ) -> tuple[CoachFacts, set[SourceType]]:
+    async def _facts(self, session: AsyncSession, user: User, moment: datetime) -> CoachFacts:
         history = await ActivityRepository(session).run_history(user.id, started_before=moment)
         facts = calculate_facts(
             tuple(
@@ -195,7 +139,7 @@ class CoachService:
             as_of=moment,
             timezone=user.timezone,
         )
-        return facts, {item.source_type for item in history}
+        return facts
 
     @staticmethod
     async def _require_user(session: AsyncSession, telegram_user_id: int) -> User:
@@ -203,40 +147,6 @@ class CoachService:
         if found is None:
             raise CoachError("Сначала выполните /start.")
         return found[0]
-
-
-def format_recommendation(recommendation: WorkoutRecommendation) -> str:
-    pace = "по самочувствию"
-    if recommendation.pace_min_sec_per_km is not None and recommendation.pace_max_sec_per_km:
-        pace = (
-            f"{format_pace(recommendation.pace_min_sec_per_km)}–"
-            f"{format_pace(recommendation.pace_max_sec_per_km)}/км"
-        )
-    workout_type = {
-        RunClassification.EASY: "лёгкая пробежка",
-        RunClassification.RECOVERY: "восстановительная пробежка",
-        RunClassification.STEADY: "спокойная пробежка",
-        RunClassification.TEMPO: "темповая пробежка",
-        RunClassification.INTERVAL: "интервальная тренировка",
-        RunClassification.LONG_RUN: "длинная пробежка",
-        RunClassification.RACE: "забег",
-        RunClassification.UNKNOWN: "пробежка",
-    }[recommendation.workout_type]
-    observations = (
-        "\n".join(f"• {item}" for item in recommendation.observations)
-        if recommendation.observations
-        else "Наблюдений, требующих дополнительной осторожности, нет."
-    )
-    return (
-        "<b>Следующая тренировка</b>\n\n"
-        f"Дата: <b>не раньше {recommendation.recommended_on:%d.%m.%Y}</b>\n"
-        f"Тип: {workout_type}\n"
-        f"Дистанция: <b>{recommendation.distance_m / 1000:.2f} км</b>\n"
-        f"Длительность: {format_duration(recommendation.duration_sec)}\n"
-        f"Темп: {pace}\n\nПричина: {recommendation.reason}\n\n"
-        f"<b>Что учтено</b>\n{observations}\n\n"
-        "Это консервативная эвристика, а не медицинская рекомендация."
-    )
 
 
 def format_week(facts: CoachFacts) -> str:

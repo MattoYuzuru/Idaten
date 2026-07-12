@@ -25,25 +25,25 @@ class Settings(BaseSettings):
     health_connect_link_attempt_window_seconds: int = 900
     health_connect_max_batch_size: int = 25
     outbox_poll_seconds: int = 5
-    llm_provider: str = "NONE"
-    llm_model: str = ""
-    llm_api_key: SecretStr | None = None
-    llm_endpoint: str | None = None
-    llm_timeout_seconds: float = 8.0
-    llm_retries: int = 1
     bot_owner_telegram_id: int | None = None
-    activity_extraction_enabled: bool = False
-    activity_extraction_provider: str = "NONE"
-    activity_extraction_model: str = "gpt-4.1-nano"
-    activity_extraction_endpoint: str = "https://api.openai.com/v1/responses"
-    activity_extraction_api_key: SecretStr | None = None
-    activity_extraction_timeout_seconds: float = 15.0
-    activity_extraction_retries: int = 1
-    activity_extraction_max_text_chars: int = 4_000
-    activity_extraction_max_image_bytes: int = 5 * 1024 * 1024
-    activity_extraction_max_image_pixels: int = 20_000_000
-    activity_extraction_daily_user_limit: int = 5
-    activity_extraction_monthly_global_limit: int = 100
+    ai_enabled: bool = False
+    ai_default_provider: str = "OPENAI"
+    ai_openai_api_key: SecretStr | None = None
+    ai_openai_endpoint: str = "https://api.openai.com/v1"
+    ai_task_activity_extraction_provider: str = "OPENAI"
+    ai_task_activity_extraction_model: str = "gpt-4.1-nano"
+    ai_task_readiness_extraction_provider: str = "OPENAI"
+    ai_task_readiness_extraction_model: str = "gpt-4.1-nano"
+    ai_task_voice_transcription_provider: str = "OPENAI"
+    ai_task_voice_transcription_model: str = "gpt-4o-mini-transcribe"
+    ai_timeout_seconds: float = 15.0
+    ai_retries: int = 1
+    ai_max_text_chars: int = 4_000
+    ai_max_image_bytes: int = 5 * 1024 * 1024
+    ai_max_image_pixels: int = 20_000_000
+    ai_max_audio_bytes: int = 10 * 1024 * 1024
+    ai_daily_user_limit: int = 5
+    ai_monthly_global_limit: int = 100
 
     @property
     def bot_token(self) -> str | None:
@@ -67,17 +67,10 @@ class Settings(BaseSettings):
         return value or None
 
     @property
-    def wording_api_key(self) -> str | None:
-        if self.llm_api_key is None:
+    def ai_api_key(self) -> str | None:
+        if self.ai_openai_api_key is None:
             return None
-        value = self.llm_api_key.get_secret_value().strip()
-        return value or None
-
-    @property
-    def extraction_api_key(self) -> str | None:
-        if self.activity_extraction_api_key is None:
-            return None
-        value = self.activity_extraction_api_key.get_secret_value().strip()
+        value = self.ai_openai_api_key.get_secret_value().strip()
         return value or None
 
 

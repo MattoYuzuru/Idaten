@@ -46,6 +46,11 @@ class ReadinessCheckIn(TimestampMixin, Base):
             name="sleep_duration_range",
         ),
         CheckConstraint(
+            "sleep_summary_id IS NULL OR "
+            "(sleep_duration_sec IS NOT NULL AND sleep_ended_at IS NOT NULL)",
+            name="sleep_provenance_complete",
+        ),
+        CheckConstraint(
             "external_load IS NULL OR external_load BETWEEN 0 AND 10", name="external_load_range"
         ),
         CheckConstraint(
@@ -112,7 +117,11 @@ class ReadinessCheckIn(TimestampMixin, Base):
     sleep_quality: Mapped[int | None] = mapped_column(Integer)
     sleep_duration_sec: Mapped[int | None] = mapped_column(Integer)
     sleep_ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    sleep_summary_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    sleep_summary_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("health_connect_sleep_summaries.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     external_load: Mapped[int | None] = mapped_column(Integer)
     pain_present: Mapped[bool | None] = mapped_column(Boolean)
     pain_severity: Mapped[int | None] = mapped_column(Integer)

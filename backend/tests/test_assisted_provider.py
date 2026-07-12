@@ -1,10 +1,14 @@
 import json
 import struct
+from datetime import date
 
 import pytest
 
+from app.activities.models import DraftInputMethod
+from app.ai.contracts import AiTask
+from app.ai.providers.openai import OpenAiProvider
+from app.ai.schemas import ActivityExtractionRequest, ActivityExtractionResult
 from app.assisted.media import validate_image
-from app.assisted.provider import OpenAIActivityExtractionProvider
 from app.assisted.schemas import AssistedError
 
 
@@ -16,7 +20,10 @@ def test_png_validation_checks_magic_mime_and_pixels() -> None:
     assert captured.value.code == "IMAGE_MIME"
 
 
-def test_openai_response_parser_accepts_strict_output() -> None:
+@pytest.mark.asyncio
+async def test_openai_response_parser_accepts_strict_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = {
         "id": "resp-1",
         "output": [
@@ -45,12 +52,12 @@ def test_openai_response_parser_accepts_strict_output() -> None:
             }
         ],
     }
-    provider = OpenAIActivityExtractionProvider("test", "secret")
+    provider = OpenAiProvider("secret", "https://api.openai.test/v1", request_timeout_seconds=1)
 
     captured_body: dict[str, object] = {}
 
     class Response:
-        def __enter__(self):
+        def __enter__(self) -> "Response":
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -59,31 +66,25 @@ def test_openai_response_parser_accepts_strict_output() -> None:
         def read(self) -> bytes:
             return json.dumps(payload).encode()
 
-    from app.assisted import provider as provider_module
+    from app.ai.providers import openai as provider_module
 
-    original = provider_module.urllib.request.urlopen
-
-    def open_response(request, **_kwargs):
+    def open_response(request: object, **_kwargs: object) -> Response:
+        assert hasattr(request, "data")
         captured_body.update(json.loads(request.data))
         return Response()
 
-    provider_module.urllib.request.urlopen = open_response
-    try:
-        from datetime import date
-
-        from app.activities.models import DraftInputMethod
-        from app.assisted.schemas import ExtractionRequest
-
-        result = provider._extract_sync(
-            ExtractionRequest(
-                method=DraftInputMethod.TEXT,
-                timezone="Europe/Moscow",
-                local_date=date(2026, 7, 11),
-                text="5 км за 30 минут",
-            )
-        )
-    finally:
-        provider_module.urllib.request.urlopen = original
+    monkeypatch.setattr(provider_module.urllib.request, "urlopen", open_response)
+    result = await provider.execute(
+        AiTask.ACTIVITY_EXTRACTION,
+        ActivityExtractionRequest(
+            method=DraftInputMethod.TEXT,
+            timezone="Europe/Moscow",
+            local_date=date(2026, 7, 11),
+            text="5 км за 30 минут",
+        ),
+        "gpt-test",
+    )
+    assert isinstance(result, ActivityExtractionResult)
     assert result.provider_request_id == "resp-1"
     assert result.run.distance_m == 5000
     assert captured_body["store"] is False

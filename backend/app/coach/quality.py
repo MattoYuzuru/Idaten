@@ -44,7 +44,8 @@ def assess_data_quality(
                 if readiness.sleep_ended_at.tzinfo
                 else readiness.sleep_ended_at.replace(tzinfo=UTC)
             )
-            if now - ended > timedelta(hours=36):
+            age = now.astimezone(UTC) - ended.astimezone(UTC)
+            if age < timedelta(0) or age > timedelta(hours=36):
                 sleep = 0.0
     weighted = [(volume, 0.35), (pace, 0.20), (readiness_score, 0.25)]
     if heart_rate > 0:

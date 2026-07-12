@@ -9,7 +9,7 @@ from app.coach.config import DEFAULT_CONFIG, AdaptiveCoachConfig
 from app.coach.facts import RunFact, TrainingFeatures, calculate_training_features
 from app.coach.prescription import Prescription, build_prescription
 from app.coach.quality import DataQualityAssessment, assess_data_quality
-from app.coach.readiness import AthleteState, assess_readiness
+from app.coach.readiness import AthleteState, assess_readiness, without_stale_sleep
 from app.goals.domain import RunningGoalType
 from app.readiness.schemas import ReadinessValues
 
@@ -54,14 +54,15 @@ def calculate_adaptive_recommendation(
 ) -> AdaptiveRecommendation:
     features = calculate_training_features(runs, as_of=as_of, config=config)
     quality = assess_data_quality(runs, features, readiness, as_of=as_of)
-    state = assess_readiness(readiness)
-    selected, safety = select_candidate(features, state, quality, readiness, goal, config)
+    effective_readiness = without_stale_sleep(readiness, as_of=as_of)
+    state = assess_readiness(effective_readiness)
+    selected, safety = select_candidate(features, state, quality, effective_readiness, goal, config)
     prescription = build_prescription(
         selected,
         features,
         state,
         quality,
-        readiness,
+        effective_readiness,
         goal,
         runs,
         as_of=as_of,

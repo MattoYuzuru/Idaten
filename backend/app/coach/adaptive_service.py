@@ -2,6 +2,7 @@ import hashlib
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -31,10 +32,18 @@ from app.readiness.service import ReadinessService
 from app.users.models import User
 from app.users.repository import UserRepository
 
+if TYPE_CHECKING:
+    from app.health_connect.service import HealthConnectService
+
 
 class NextRunService:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        sleep_service: "HealthConnectService",
+    ) -> None:
         self.session_factory = session_factory
+        self.sleep_service = sleep_service
         self.goals = GoalService(session_factory)
         self.readiness = ReadinessService(session_factory)
         self.lifecycle = RecommendationLifecycle()
@@ -114,20 +123,37 @@ class NextRunService:
         moment: datetime | None = None,
     ) -> ReadinessDraft:
         linked_activity_id: uuid.UUID | None = None
+        user_id: uuid.UUID | None = None
         if phase == CheckInPhase.POST_RUN:
             async with self.session_factory() as session:
                 user = await self._require_user(session, telegram_user_id)
+                user_id = user.id
                 history = await ActivityRepository(session).run_history(
                     user.id, started_before=moment or datetime.now(UTC)
                 )
                 if history:
                     linked_activity_id = history[-1].activity_id
+        if user_id is None:
+            async with self.session_factory() as session:
+                user_id = (await self._require_user(session, telegram_user_id)).id
+        selected_source = source
+        selected_prefill = prefill
+        if selected_prefill is None:
+            sleep = await self.sleep_service.sleep_prefill_for_user(user_id, moment=moment)
+            if sleep is not None:
+                selected_prefill = ReadinessValues(
+                    sleep_quality=sleep.sleep_quality,
+                    sleep_duration_sec=sleep.duration_sec,
+                    sleep_ended_at=sleep.ended_at,
+                    sleep_summary_id=sleep.summary_id,
+                )
+                selected_source = CheckInInputSource.HEALTH_CONNECT
         return await self.readiness.start_draft(
             telegram_user_id,
             phase,
-            source=source,
+            source=selected_source,
             linked_activity_id=linked_activity_id,
-            prefill=prefill,
+            prefill=selected_prefill,
             moment=moment,
         )
 
@@ -153,6 +179,7 @@ class NextRunService:
             if source is None:
                 raise CoachError("Source check-in не найден.")
             values = ReadinessService._values(source)
+            input_source = source.source
             phase = (
                 CheckInPhase.PRE_RUN
                 if recommendation.status == RecommendationStatus.PROVISIONAL
@@ -162,8 +189,45 @@ class NextRunService:
         return await self.start_check_in(
             telegram_user_id,
             phase,
-            source=CheckInInputSource.MANUAL,
+            source=input_source,
             prefill=values,
+            moment=now,
+        )
+
+    async def recalculate(
+        self,
+        telegram_user_id: int,
+        recommendation_id: uuid.UUID,
+        *,
+        idempotency_key: str,
+        moment: datetime | None = None,
+    ) -> RecommendationDto:
+        now = moment or datetime.now(UTC)
+        async with self.session_factory() as session:
+            user = await self._require_user(session, telegram_user_id)
+            repository = CoachRepository(session)
+            repeated = await repository.recommendation_by_idempotency(user.id, idempotency_key)
+            if repeated is not None:
+                return await self._recommendation_dto(session, repeated)
+            current = await repository.recommendation(recommendation_id)
+            if (
+                current is None
+                or current.user_id != user.id
+                or current.status != RecommendationStatus.PROVISIONAL
+            ):
+                raise CoachError("Provisional recommendation не найдена.")
+            if now >= self._utc(current.not_before):
+                raise CoachError("Перед стартом сначала подтвердите новое самочувствие.")
+            active_draft = await ReadinessRepository(session).active_draft(
+                user.id, CheckInPhase.POST_RUN
+            )
+            if active_draft is not None:
+                raise CoachError("Сначала завершите или отмените текущий check-in.")
+        draft = await self.revision_draft(telegram_user_id, recommendation_id, moment=now)
+        return await self.confirm_and_recommend(
+            telegram_user_id,
+            draft.check_in_id,
+            idempotency_key=idempotency_key,
             moment=now,
         )
 

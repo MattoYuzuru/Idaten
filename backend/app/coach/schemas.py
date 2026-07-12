@@ -14,15 +14,6 @@ class CoachError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class CoachResponse:
-    report_id: uuid.UUID
-    facts: CoachFacts
-    recommendation: WorkoutRecommendation
-    message: str
-    provider: str
-
-
-@dataclass(frozen=True, slots=True)
 class WeekResponse:
     facts: CoachFacts
     message: str

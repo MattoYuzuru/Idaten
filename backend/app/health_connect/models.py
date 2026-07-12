@@ -108,6 +108,42 @@ class HealthConnectSyncBatch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class HealthConnectSleepSummary(TimestampMixin, Base):
+    __tablename__ = "health_connect_sleep_summaries"
+    __table_args__ = (
+        UniqueConstraint(
+            "device_id",
+            "external_id",
+            name="uq_health_connect_sleep_summaries_device_external",
+        ),
+        CheckConstraint(
+            "duration_sec IS NULL OR duration_sec BETWEEN 1 AND 86400",
+            name="duration_range",
+        ),
+        CheckConstraint(
+            "sleep_quality IS NULL OR sleep_quality BETWEEN 1 AND 5",
+            name="quality_range",
+        ),
+        CheckConstraint(
+            "started_at IS NULL OR ended_at IS NULL OR ended_at > started_at",
+            name="positive_interval",
+        ),
+        Index("ix_health_connect_sleep_user_end", "user_id", "ended_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    external_id: Mapped[str] = mapped_column(String(255))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_sec: Mapped[int | None] = mapped_column(Integer)
+    sleep_quality: Mapped[int | None] = mapped_column(Integer)
+    data_origin: Mapped[str | None] = mapped_column(String(255))
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class TelegramOutbox(Base):
     __tablename__ = "telegram_outbox"
     __table_args__ = (

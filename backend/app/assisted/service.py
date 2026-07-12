@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
@@ -15,14 +14,15 @@ from app.activities.models import (
     SourceType,
 )
 from app.activities.repository import ActivityRepository
+from app.ai.contracts import AiError, AiTask
+from app.ai.router import AiRouter
 from app.assisted.media import validate_image
 from app.assisted.models import (
-    AssistedAccess,
-    AssistedAccessStatus,
-    ExtractionAttempt,
-    ExtractionAttemptStatus,
+    AiAttempt,
+    AiAttemptStatus,
+    ExternalAiAccess,
+    ExternalAiAccessStatus,
 )
-from app.assisted.provider import ActivityExtractionProvider, ExtractionProviderName
 from app.assisted.repository import AssistedRepository
 from app.assisted.schemas import (
     CONSENT_VERSION,
@@ -46,7 +46,7 @@ class AssistedActivityService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         user_service: UserService,
-        provider: ActivityExtractionProvider,
+        ai_router: AiRouter,
         *,
         enabled: bool,
         owner_telegram_user_id: int | None,
@@ -55,12 +55,10 @@ class AssistedActivityService:
         max_image_pixels: int,
         daily_user_limit: int,
         monthly_global_limit: int,
-        timeout_seconds: float,
-        retries: int,
     ) -> None:
         self.session_factory = session_factory
         self.user_service = user_service
-        self.provider = provider
+        self.ai_router = ai_router
         self.enabled = enabled
         self.owner_telegram_user_id = owner_telegram_user_id
         self.max_text_chars = max_text_chars
@@ -68,29 +66,36 @@ class AssistedActivityService:
         self.max_image_pixels = max_image_pixels
         self.daily_user_limit = daily_user_limit
         self.monthly_global_limit = monthly_global_limit
-        self.timeout_seconds = timeout_seconds
-        self.retries = max(0, retries)
 
     async def gate(self, identity: TelegramIdentity, method: DraftInputMethod) -> InputGate:
         self._require_assisted_method(method)
+        status = await self.ai_gate(identity, AiTask.ACTIVITY_EXTRACTION)
+        return InputGate(status, method)
+
+    async def ai_gate(self, identity: TelegramIdentity, task: AiTask) -> InputGateStatus:
         user = await self.user_service.register(identity)
-        if not self.enabled or self.provider.name == ExtractionProviderName.NONE:
-            return InputGate(InputGateStatus.DISABLED, method)
+        if not self._task_enabled(task):
+            return InputGateStatus.DISABLED
         async with self.session_factory() as session:
             current = await session.get(User, user.id)
             if current is None:
                 raise AssistedError("Пользователь не найден.", code="USER_NOT_FOUND")
-            if current.assisted_input_consent_version != CONSENT_VERSION:
-                return InputGate(InputGateStatus.CONSENT_REQUIRED, method)
+            if current.external_ai_consent_version != CONSENT_VERSION:
+                return InputGateStatus.CONSENT_REQUIRED
             access = await AssistedRepository(session).access(user.id)
-            if access is None or access.status == AssistedAccessStatus.PENDING:
-                return InputGate(InputGateStatus.ACCESS_PENDING, method)
-            if access.status == AssistedAccessStatus.REVOKED:
-                return InputGate(InputGateStatus.ACCESS_REVOKED, method)
-        return InputGate(InputGateStatus.READY, method)
+            if access is None or access.status == ExternalAiAccessStatus.PENDING:
+                return InputGateStatus.ACCESS_PENDING
+            if access.status == ExternalAiAccessStatus.REVOKED:
+                return InputGateStatus.ACCESS_REVOKED
+        return InputGateStatus.READY
 
-    async def accept_consent(self, identity: TelegramIdentity) -> AccessRequestResult:
-        if not self.enabled or self.provider.name == ExtractionProviderName.NONE:
+    async def accept_consent(
+        self,
+        identity: TelegramIdentity,
+        *,
+        task: AiTask = AiTask.ACTIVITY_EXTRACTION,
+    ) -> AccessRequestResult:
+        if not self._task_enabled(task):
             raise AssistedError("Распознавание сейчас недоступно.", code="PROVIDER_DISABLED")
         user = await self.user_service.register(identity)
         now = datetime.now(UTC)
@@ -98,13 +103,13 @@ class AssistedActivityService:
             current = await session.get(User, user.id, with_for_update=True)
             if current is None:
                 raise AssistedError("Пользователь не найден.", code="USER_NOT_FOUND")
-            current.assisted_input_consent_version = CONSENT_VERSION
-            current.assisted_input_consented_at = now
+            current.external_ai_consent_version = CONSENT_VERSION
+            current.external_ai_consented_at = now
             repository = AssistedRepository(session)
             access = await repository.access(user.id, for_update=True)
             created = access is None
             if access is None:
-                access = AssistedAccess(user_id=user.id, status=AssistedAccessStatus.PENDING)
+                access = ExternalAiAccess(user_id=user.id, status=ExternalAiAccessStatus.PENDING)
                 repository.add(access)
             account = await UserRepository(session).get_by_telegram_id(identity.telegram_user_id)
             if account is None:
@@ -113,7 +118,7 @@ class AssistedActivityService:
             return AccessRequestResult(
                 status=access.status,
                 notify_owner=(
-                    access.status == AssistedAccessStatus.PENDING
+                    access.status == ExternalAiAccessStatus.PENDING
                     and (created or access.notification_sent_at is None)
                 ),
                 telegram_user_id=telegram.telegram_user_id,
@@ -147,15 +152,17 @@ class AssistedActivityService:
             repository = AssistedRepository(session)
             access = await repository.access(user.id, for_update=True)
             if access is None:
-                access = AssistedAccess(user_id=user.id, status=AssistedAccessStatus.PENDING)
+                access = ExternalAiAccess(user_id=user.id, status=ExternalAiAccessStatus.PENDING)
                 repository.add(access)
-            access.status = AssistedAccessStatus.ALLOWED if allow else AssistedAccessStatus.REVOKED
+            access.status = (
+                ExternalAiAccessStatus.ALLOWED if allow else ExternalAiAccessStatus.REVOKED
+            )
             access.decided_at = now
             access.decided_by_telegram_user_id = owner_telegram_user_id
             return AccessOverview(
                 telegram_user_id=target_telegram_user_id,
                 status=access.status,
-                consent_current=user.assisted_input_consent_version == CONSENT_VERSION,
+                consent_current=user.external_ai_consent_version == CONSENT_VERSION,
             )
 
     async def access_overview(
@@ -171,13 +178,15 @@ class AssistedActivityService:
             return AccessOverview(
                 telegram_user_id=target_telegram_user_id,
                 status=access.status if access else None,
-                consent_current=user.assisted_input_consent_version == CONSENT_VERSION,
+                consent_current=user.external_ai_consent_version == CONSENT_VERSION,
             )
 
     async def start_draft(self, telegram_user_id: int, method: DraftInputMethod) -> uuid.UUID:
         self._require_assisted_method(method)
         async with self.session_factory.begin() as session:
-            user = await self._require_allowed_user(session, telegram_user_id)
+            user = await self.require_allowed_user(
+                session, telegram_user_id, AiTask.ACTIVITY_EXTRACTION
+            )
             repository = ActivityRepository(session)
             active = await repository.active_manual_draft(user.id)
             if active is not None:
@@ -274,7 +283,9 @@ class AssistedActivityService:
         digest = hashlib.sha256(digest_content).hexdigest()
         now = datetime.now(UTC)
         async with self.session_factory.begin() as session:
-            user = await self._require_allowed_user(session, telegram_user_id)
+            user = await self.require_allowed_user(
+                session, telegram_user_id, AiTask.ACTIVITY_EXTRACTION
+            )
             draft = await ActivityRepository(session).manual_draft(draft_id, for_update=True)
             if (
                 draft is None
@@ -287,18 +298,20 @@ class AssistedActivityService:
             if draft.input_method == DraftInputMethod.SCREENSHOT and image is None:
                 raise AssistedError("Ожидался скриншот.", code="INPUT_METHOD")
             repository = AssistedRepository(session)
-            await self._check_limits(repository, user, now)
+            await self.check_limits(repository, user, now)
             succeeded = await repository.successful_attempt(draft.id, digest)
             if succeeded is not None:
                 return draft.id
-            attempt = ExtractionAttempt(
+            route = self.ai_router.route(AiTask.ACTIVITY_EXTRACTION)
+            attempt = AiAttempt(
                 user_id=user.id,
                 draft_id=draft.id,
+                task=AiTask.ACTIVITY_EXTRACTION,
                 input_method=draft.input_method,
                 input_sha256=digest,
-                provider=self.provider.name.value,
-                provider_model=self.provider.model,
-                status=ExtractionAttemptStatus.PROCESSING,
+                provider=route.provider,
+                provider_model=route.model,
+                status=AiAttemptStatus.PROCESSING,
                 created_at=now,
             )
             repository.add(attempt)
@@ -330,7 +343,9 @@ class AssistedActivityService:
 
         try:
             async with self.session_factory.begin() as session:
-                user = await self._require_allowed_user(session, telegram_user_id)
+                user = await self.require_allowed_user(
+                    session, telegram_user_id, AiTask.ACTIVITY_EXTRACTION
+                )
                 draft = await ActivityRepository(session).manual_draft(draft_id, for_update=True)
                 if (
                     draft is None
@@ -341,8 +356,9 @@ class AssistedActivityService:
                 self._apply_extracted(draft, result.run, request.local_date)
                 draft.pending_field = None
                 draft.input_sha256 = digest
-                draft.provider = self.provider.name.value
-                draft.provider_model = self.provider.model
+                route = self.ai_router.route(AiTask.ACTIVITY_EXTRACTION)
+                draft.provider = route.provider
+                draft.provider_model = route.model
                 draft.provider_request_id = result.provider_request_id
                 draft.version += 1
                 stored_attempt = await AssistedRepository(session).attempt_by_id(
@@ -350,7 +366,7 @@ class AssistedActivityService:
                 )
                 if stored_attempt is None:
                     raise AssistedError("Attempt не найден.", code="ATTEMPT_NOT_FOUND")
-                stored_attempt.status = ExtractionAttemptStatus.SUCCEEDED
+                stored_attempt.status = AiAttemptStatus.SUCCEEDED
                 stored_attempt.provider_request_id = result.provider_request_id
                 stored_attempt.finished_at = datetime.now(UTC)
                 return draft.id
@@ -359,37 +375,20 @@ class AssistedActivityService:
             raise
 
     async def _call_provider(self, request: ExtractionRequest) -> ExtractionResult:
-        for attempt_number in range(self.retries + 1):
-            try:
-                return await asyncio.wait_for(
-                    self.provider.extract(request), timeout=self.timeout_seconds
-                )
-            except TimeoutError as error:
-                if attempt_number == self.retries:
-                    raise AssistedError(
-                        "Распознавание не ответило вовремя.", code="PROVIDER_TIMEOUT"
-                    ) from error
-            except AssistedError:
-                if attempt_number == self.retries:
-                    raise
-            except Exception as error:
-                if attempt_number == self.retries:
-                    raise AssistedError(
-                        "Provider временно недоступен.", code="PROVIDER_FAILED"
-                    ) from error
-        raise AssistedError("Provider недоступен.", code="PROVIDER_FAILED")
+        try:
+            return await self.ai_router.activity(request)
+        except AiError as error:
+            raise AssistedError(str(error), code=error.code) from error
 
     async def _finish_failed(self, attempt_id: uuid.UUID, error_code: str) -> None:
         async with self.session_factory.begin() as session:
             attempt = await AssistedRepository(session).attempt_by_id(attempt_id, for_update=True)
             if attempt is not None:
-                attempt.status = ExtractionAttemptStatus.FAILED
+                attempt.status = AiAttemptStatus.FAILED
                 attempt.error_code = error_code
                 attempt.finished_at = datetime.now(UTC)
 
-    async def _check_limits(
-        self, repository: AssistedRepository, user: User, now: datetime
-    ) -> None:
+    async def check_limits(self, repository: AssistedRepository, user: User, now: datetime) -> None:
         zone = ZoneInfo(user.timezone)
         local = now.astimezone(zone)
         day_start = datetime.combine(local.date(), time.min, zone).astimezone(UTC)
@@ -416,19 +415,30 @@ class AssistedActivityService:
         ):
             raise AssistedError("Месячный лимит распознаваний исчерпан.", code="MONTHLY_LIMIT")
 
-    async def _require_allowed_user(self, session: AsyncSession, telegram_user_id: int) -> User:
-        if not self.enabled or self.provider.name == ExtractionProviderName.NONE:
+    async def require_allowed_user(
+        self, session: AsyncSession, telegram_user_id: int, task: AiTask
+    ) -> User:
+        if not self._task_enabled(task):
             raise AssistedError("Распознавание сейчас недоступно.", code="PROVIDER_DISABLED")
         found = await UserRepository(session).get_by_telegram_id(telegram_user_id)
         if found is None:
             raise AssistedError("Сначала выполните /start.", code="USER_NOT_FOUND")
         user, _account = found
-        if user.assisted_input_consent_version != CONSENT_VERSION:
+        if user.external_ai_consent_version != CONSENT_VERSION:
             raise AssistedError("Требуется согласие на внешнюю обработку.", code="CONSENT_REQUIRED")
         access = await AssistedRepository(session).access(user.id)
-        if access is None or access.status != AssistedAccessStatus.ALLOWED:
+        if access is None or access.status != ExternalAiAccessStatus.ALLOWED:
             raise AssistedError("Доступ к распознаванию не выдан.", code="ACCESS_DENIED")
         return user
+
+    def _task_enabled(self, task: AiTask) -> bool:
+        if not self.enabled:
+            return False
+        try:
+            self.ai_router.route(task)
+        except AiError:
+            return False
+        return True
 
     def _require_owner(self, telegram_user_id: int) -> None:
         if self.owner_telegram_user_id is None or telegram_user_id != self.owner_telegram_user_id:

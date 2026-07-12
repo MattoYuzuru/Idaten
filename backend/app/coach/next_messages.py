@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from html import escape
 
 from app.analytics.metrics import format_duration, format_pace
@@ -85,7 +86,7 @@ def format_prescription(prescription: Prescription) -> str:
     )
 
 
-def format_check_in(draft: ReadinessDraft) -> str:
+def format_check_in(draft: ReadinessDraft, *, moment: datetime | None = None) -> str:
     values = draft.values
     pain = "нет"
     if values.pain_present:
@@ -98,7 +99,20 @@ def format_check_in(draft: ReadinessDraft) -> str:
             if values.sleep_duration_sec is None
             else format_duration(values.sleep_duration_sec)
         )
-        sleep = f"качество {quality}, длительность {duration}"
+        provenance = ""
+        if values.sleep_summary_id is not None and values.sleep_ended_at is not None:
+            now = moment or datetime.now(UTC)
+            age = now.astimezone(UTC) - values.sleep_ended_at.astimezone(UTC)
+            freshness = (
+                "свежий prefill"
+                if timedelta(0) <= age <= timedelta(hours=36)
+                else "устарел и не войдёт в расчёт"
+            )
+            provenance = (
+                f", Health Connect: {freshness} "
+                f"(сон завершился {values.sleep_ended_at:%d.%m %H:%M})"
+            )
+        sleep = f"качество {quality}, длительность {duration}{provenance}"
     return (
         "<b>Проверка готовности</b>\n\n"
         f"Готовность: {_value(values.overall_readiness, '/5')}\n"

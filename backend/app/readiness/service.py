@@ -79,9 +79,12 @@ class ReadinessService:
             if expected_version is not None and check_in.version != expected_version:
                 raise ReadinessError("Черновик изменился; обновите preview.")
             self._validate_values(values, check_in.phase, confirmed=False)
+            had_sleep_prefill = check_in.sleep_summary_id is not None
             self._assign(check_in, values)
             if source is not None:
                 check_in.source = source
+            elif had_sleep_prefill:
+                check_in.source = CheckInInputSource.MERGED
             check_in.source_confidence = source_confidence
             check_in.version += 1
             return self._dto(check_in)
@@ -110,7 +113,10 @@ class ReadinessService:
             }[field]
             for name in names:
                 setattr(check_in, name, None)
-            if field == "sleep" and check_in.source == CheckInInputSource.HEALTH_CONNECT:
+            if field == "sleep" and check_in.source in {
+                CheckInInputSource.HEALTH_CONNECT,
+                CheckInInputSource.MERGED,
+            }:
                 check_in.source = CheckInInputSource.MANUAL
             check_in.version += 1
             return self._dto(check_in)
@@ -149,6 +155,21 @@ class ReadinessService:
             )
             return self._dto(check_in)
 
+    async def set_pending_field(
+        self, telegram_user_id: int, check_in_id: uuid.UUID, field: str
+    ) -> ReadinessDraft:
+        if field not in {"ai_text", "ai_voice"}:
+            raise ReadinessError("Некорректное pending field.")
+        now = datetime.now(UTC)
+        async with self.session_factory.begin() as session:
+            user = await self._require_user(session, telegram_user_id)
+            check_in = await self._owned(session, user.id, check_in_id, now, for_update=True)
+            if check_in.status != CheckInStatus.DRAFT:
+                raise ReadinessError("Черновик уже закрыт.")
+            check_in.pending_field = field
+            check_in.version += 1
+            return self._dto(check_in)
+
     @staticmethod
     def _validate_values(values: ReadinessValues, phase: CheckInPhase, *, confirmed: bool) -> None:
         ranges = {
@@ -173,6 +194,12 @@ class ReadinessService:
             location = values.pain_location.strip()
             if not location or len(location) > 120:
                 raise ReadinessError("Локация боли должна быть от 1 до 120 символов.")
+        if values.sleep_ended_at is not None and values.sleep_ended_at.tzinfo is None:
+            raise ReadinessError("Время окончания сна должно иметь timezone.")
+        if values.sleep_summary_id is not None and (
+            values.sleep_duration_sec is None or values.sleep_ended_at is None
+        ):
+            raise ReadinessError("Sleep provenance требует duration и end time.")
         pain_details = (
             values.pain_severity,
             values.pain_location,

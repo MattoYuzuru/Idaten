@@ -15,20 +15,25 @@ from app.readiness.schemas import ReadinessDraft, ReadinessError, ReadinessValue
 NOW = datetime(2026, 7, 12, 12, tzinfo=UTC)
 
 
-def draft(values: ReadinessValues | None = None) -> ReadinessDraft:
+def draft(
+    values: ReadinessValues | None = None,
+    *,
+    phase: CheckInPhase = CheckInPhase.POST_RUN,
+    linked_activity_id: uuid.UUID | None = None,
+) -> ReadinessDraft:
     return ReadinessDraft(
-        uuid.UUID(int=1),
-        CheckInPhase.POST_RUN,
-        CheckInStatus.DRAFT,
-        CheckInInputSource.MANUAL,
-        None,
-        values or ReadinessValues(),
-        None,
-        None,
-        NOW + timedelta(hours=24),
-        None,
-        1,
-        None,
+        check_in_id=uuid.UUID(int=1),
+        phase=phase,
+        status=CheckInStatus.DRAFT,
+        source=CheckInInputSource.MANUAL,
+        source_confidence=None,
+        values=values or ReadinessValues(),
+        linked_activity_id=linked_activity_id,
+        pending_field=None,
+        expires_at=NOW + timedelta(hours=24),
+        confirmed_at=None,
+        version=1,
+        telegram_message_id=None,
     )
 
 
@@ -56,7 +61,7 @@ def test_goal_and_readiness_keyboards_use_safe_labels_and_bounded_callbacks() ->
             "available_time_sec",
         )
     )
-    values = callbacks(goals) + callbacks(preview_keyboard(check_in.check_in_id))
+    values = callbacks(goals) + callbacks(preview_keyboard(check_in))
     values += callbacks(recommendation_keyboard(uuid.UUID(int=2)))
     values += tuple(value for keyboard in field_keyboards for value in callbacks(keyboard))
 
@@ -64,6 +69,19 @@ def test_goal_and_readiness_keyboards_use_safe_labels_and_bounded_callbacks() ->
     assert "Общая выносливость" in goal_labels
     assert all(len(value.encode()) <= 64 for value in values)
     assert all("колено" not in value and "бол" not in value for value in values)
+
+
+def test_preview_edits_available_time_and_only_post_run_linked_rpe() -> None:
+    linked = draft(linked_activity_id=uuid.UUID(int=3))
+    pre_run = draft(phase=CheckInPhase.PRE_RUN)
+
+    linked_callbacks = callbacks(preview_keyboard(linked))
+    pre_run_callbacks = callbacks(preview_keyboard(pre_run))
+
+    assert f"next:e:{linked.check_in_id.hex}:a" in linked_callbacks
+    assert f"next:e:{linked.check_in_id.hex}:r" in linked_callbacks
+    assert f"next:e:{pre_run.check_in_id.hex}:a" in pre_run_callbacks
+    assert all(not value.endswith(":r") for value in pre_run_callbacks)
 
 
 def test_check_in_preview_hides_pain_location_and_internal_formulas() -> None:
@@ -88,6 +106,22 @@ def test_check_in_preview_hides_pain_location_and_internal_formulas() -> None:
     assert "private location" not in rendered
     assert "readiness_score" not in rendered
     assert "PAIN_" not in rendered
+
+
+def test_sleep_prefill_shows_provenance_and_freshness_without_internal_id() -> None:
+    rendered = format_check_in(
+        draft(
+            ReadinessValues(
+                sleep_duration_sec=28_800,
+                sleep_ended_at=NOW - timedelta(hours=8),
+                sleep_summary_id=uuid.UUID(int=99),
+            )
+        ),
+        moment=NOW,
+    )
+
+    assert "Health Connect: свежий prefill" in rendered
+    assert uuid.UUID(int=99).hex not in rendered
 
 
 def test_rest_presentation_is_allowlisted_and_has_no_diagnosis() -> None:

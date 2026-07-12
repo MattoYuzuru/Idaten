@@ -9,12 +9,14 @@ from sqlalchemy.pool import StaticPool
 
 from app.activities.models import Activity, ActivityVisibility, DraftInputMethod, SourceType
 from app.activities.schemas import ActivityInputError, ManualRunInput, PossibleDuplicateError
+from app.ai.contracts import AiError, AiRoute, AiTask
+from app.ai.registry import AiRegistry
+from app.ai.router import AiRouter
 from app.assisted.models import (
-    AssistedAccessStatus,
-    ExtractionAttempt,
-    ExtractionAttemptStatus,
+    AiAttempt,
+    AiAttemptStatus,
+    ExternalAiAccessStatus,
 )
-from app.assisted.provider import ExtractionProviderName
 from app.assisted.schemas import (
     AssistedError,
     ExtractedRun,
@@ -31,16 +33,31 @@ from app.users.schemas import TelegramIdentity
 
 
 class FakeExtractionProvider:
-    name = ExtractionProviderName.OPENAI
-    model = "fake-cheap-vision"
+    name = "FAKE"
+    capabilities = frozenset({AiTask.ACTIVITY_EXTRACTION})
 
     def __init__(self, run: ExtractedRun) -> None:
         self.run = run
         self.requests: list[ExtractionRequest] = []
 
-    async def extract(self, request: ExtractionRequest) -> ExtractionResult:
+    async def execute(self, task: AiTask, request: object, model: str) -> object:
+        assert task == AiTask.ACTIVITY_EXTRACTION
+        assert model == "fake-cheap-vision"
+        assert isinstance(request, ExtractionRequest)
         self.requests.append(request)
         return ExtractionResult(self.run, "request-1")
+
+
+def router_for(provider: FakeExtractionProvider, *, retries: int = 0) -> AiRouter:
+    registry = AiRegistry()
+    registry.register(provider)
+    return AiRouter(
+        registry,
+        {AiTask.ACTIVITY_EXTRACTION: AiRoute("FAKE", "fake-cheap-vision")},
+        enabled=True,
+        timeout_seconds=1,
+        retries=retries,
+    )
 
 
 @pytest.fixture
@@ -74,7 +91,7 @@ async def assisted_context() -> AsyncIterator[
     assisted = AssistedActivityService(
         session_factory,
         services.users,
-        provider,
+        router_for(provider),
         enabled=True,
         owner_telegram_user_id=1,
         max_text_chars=4_000,
@@ -82,8 +99,6 @@ async def assisted_context() -> AsyncIterator[
         max_image_pixels=20_000_000,
         daily_user_limit=5,
         monthly_global_limit=100,
-        timeout_seconds=1,
-        retries=0,
     )
     yield services, assisted, provider
     await engine.dispose()
@@ -95,7 +110,7 @@ def identity() -> TelegramIdentity:
 
 async def allow(assisted: AssistedActivityService) -> None:
     request = await assisted.accept_consent(identity())
-    assert request.status == AssistedAccessStatus.PENDING
+    assert request.status == ExternalAiAccessStatus.PENDING
     await assisted.decide_access(1, 42, allow=True)
 
 
@@ -111,7 +126,7 @@ async def test_consent_access_and_owner_authorization(
     assert request.notify_owner
     await assisted.mark_notification_sent(42)
     repeated = await assisted.accept_consent(identity())
-    assert repeated.status == AssistedAccessStatus.PENDING
+    assert repeated.status == ExternalAiAccessStatus.PENDING
     assert not repeated.notify_owner
     with pytest.raises(AssistedError) as captured:
         await assisted.decide_access(999, 42, allow=True)
@@ -146,7 +161,7 @@ async def test_text_extraction_persists_only_typed_private_activity(
         assert activity is not None
         assert activity.source_type == SourceType.TEXT
         assert activity.visibility == ActivityVisibility.PRIVATE
-        attempt = (await session.execute(select(ExtractionAttempt))).scalar_one()
+        attempt = (await session.execute(select(AiAttempt))).scalar_one()
         assert attempt.input_sha256 and raw not in attempt.input_sha256
         assert await session.scalar(select(func.count(RawArtifact.id))) == 0
 
@@ -223,7 +238,7 @@ async def test_usage_limits_block_before_provider_call(
     limited = AssistedActivityService(
         assisted.session_factory,
         services.users,
-        provider,
+        router_for(provider),
         enabled=True,
         owner_telegram_user_id=1,
         max_text_chars=4_000,
@@ -231,8 +246,6 @@ async def test_usage_limits_block_before_provider_call(
         max_image_pixels=20_000_000,
         daily_user_limit=daily_limit,
         monthly_global_limit=monthly_limit,
-        timeout_seconds=1,
-        retries=0,
     )
     draft_id = await limited.start_draft(42, DraftInputMethod.TEXT)
 
@@ -253,7 +266,10 @@ async def test_revoke_is_rechecked_after_provider_and_failed_attempt_is_audited(
     class RevokingProvider(FakeExtractionProvider):
         service: AssistedActivityService
 
-        async def extract(self, request: ExtractionRequest) -> ExtractionResult:
+        async def execute(self, task: AiTask, request: object, model: str) -> object:
+            assert task == AiTask.ACTIVITY_EXTRACTION
+            assert model == "fake-cheap-vision"
+            assert isinstance(request, ExtractionRequest)
             self.requests.append(request)
             await self.service.decide_access(1, 42, allow=False)
             return ExtractionResult(self.run, "request-revoked")
@@ -262,7 +278,7 @@ async def test_revoke_is_rechecked_after_provider_and_failed_attempt_is_audited(
     guarded = AssistedActivityService(
         assisted.session_factory,
         services.users,
-        revoking,
+        router_for(revoking),
         enabled=True,
         owner_telegram_user_id=1,
         max_text_chars=4_000,
@@ -270,8 +286,6 @@ async def test_revoke_is_rechecked_after_provider_and_failed_attempt_is_audited(
         max_image_pixels=20_000_000,
         daily_user_limit=5,
         monthly_global_limit=100,
-        timeout_seconds=1,
-        retries=0,
     )
     revoking.service = guarded
     draft_id = await guarded.start_draft(42, DraftInputMethod.TEXT)
@@ -281,8 +295,8 @@ async def test_revoke_is_rechecked_after_provider_and_failed_attempt_is_audited(
 
     assert captured.value.code == "ACCESS_DENIED"
     async with guarded.session_factory() as session:
-        attempt = (await session.execute(select(ExtractionAttempt))).scalar_one()
-    assert attempt.status == ExtractionAttemptStatus.FAILED
+        attempt = (await session.execute(select(AiAttempt))).scalar_one()
+    assert attempt.status == AiAttemptStatus.FAILED
     assert attempt.error_code == "ACCESS_DENIED"
 
 
@@ -323,15 +337,18 @@ async def test_provider_failure_is_bounded_counted_and_leaves_draft_retryable(
     await allow(assisted)
 
     class FailingProvider(FakeExtractionProvider):
-        async def extract(self, request: ExtractionRequest) -> ExtractionResult:
+        async def execute(self, task: AiTask, request: object, model: str) -> object:
+            assert task == AiTask.ACTIVITY_EXTRACTION
+            assert model == "fake-cheap-vision"
+            assert isinstance(request, ExtractionRequest)
             self.requests.append(request)
-            raise AssistedError("temporary", code="PROVIDER_FAILED")
+            raise AiError("temporary", code="PROVIDER_FAILED")
 
     failing = FailingProvider(provider.run)
     guarded = AssistedActivityService(
         assisted.session_factory,
         services.users,
-        failing,
+        router_for(failing, retries=1),
         enabled=True,
         owner_telegram_user_id=1,
         max_text_chars=4_000,
@@ -339,8 +356,6 @@ async def test_provider_failure_is_bounded_counted_and_leaves_draft_retryable(
         max_image_pixels=20_000_000,
         daily_user_limit=1,
         monthly_global_limit=100,
-        timeout_seconds=1,
-        retries=1,
     )
     draft_id = await guarded.start_draft(42, DraftInputMethod.TEXT)
 
@@ -355,6 +370,6 @@ async def test_provider_failure_is_bounded_counted_and_leaves_draft_retryable(
     assert limited.value.code == "DAILY_LIMIT"
     assert len(failing.requests) == 2
     async with guarded.session_factory() as session:
-        attempt = (await session.execute(select(ExtractionAttempt))).scalar_one()
-    assert attempt.status == ExtractionAttemptStatus.FAILED
+        attempt = (await session.execute(select(AiAttempt))).scalar_one()
+    assert attempt.status == AiAttemptStatus.FAILED
     assert attempt.error_code == "PROVIDER_FAILED"

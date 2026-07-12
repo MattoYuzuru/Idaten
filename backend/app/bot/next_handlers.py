@@ -2,15 +2,21 @@ import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 from html import escape
+from io import BytesIO
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InaccessibleMessage, InlineKeyboardMarkup, Message
 
+from app.ai.contracts import AiError, AiTask
+from app.assisted.models import ExternalAiAccessStatus
+from app.assisted.schemas import AssistedError, InputGateStatus
+from app.bot.messages import EXTERNAL_AI_CONSENT_TEXT
 from app.bot.next_keyboards import (
     FIELD_NAMES,
     achievement_keyboard,
+    ai_consent_keyboard,
     boolean_keyboard,
     check_in_method_keyboard,
     duration_keyboard,
@@ -26,9 +32,10 @@ from app.coach.next_messages import GOAL_LABELS, format_check_in
 from app.coach.schemas import CoachError, NextFlowResult, NextFlowState
 from app.goals.domain import IMPROVEMENT_GOALS, RunningGoalType
 from app.goals.schemas import GoalError
-from app.readiness.domain import CheckInPhase
+from app.readiness.domain import CheckInInputSource, CheckInPhase
 from app.readiness.schemas import ReadinessDraft, ReadinessError, ReadinessValues
 from app.services import AppServices
+from app.users.schemas import TelegramIdentity
 
 router = Router(name="adaptive-next")
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -102,11 +109,29 @@ async def choose_method(callback: CallbackQuery, services: AppServices) -> None:
     except (ValueError, IndexError):
         await callback.answer("Некорректный способ ввода.", show_alert=True)
         return
+    if method in {"text", "voice"}:
+        identity = _callback_identity(callback)
+        status = await services.assisted.ai_gate(identity, AiTask.READINESS_EXTRACTION)
+        if method == "voice" and status == InputGateStatus.READY:
+            status = await services.assisted.ai_gate(identity, AiTask.VOICE_TRANSCRIPTION)
+        if status == InputGateStatus.CONSENT_REQUIRED:
+            if callback.message is not None:
+                await callback.message.answer(
+                    EXTERNAL_AI_CONSENT_TEXT,
+                    reply_markup=ai_consent_keyboard(phase.value, method),
+                )
+            await callback.answer()
+            return
+        if status != InputGateStatus.READY:
+            await callback.answer(
+                "Внешний ввод пока недоступен. Ручная проверка всегда работает.",
+                show_alert=True,
+            )
+            return
+        await _begin_ai_input(callback, services, phase, method)
+        return
     if method != "manual":
-        await callback.answer(
-            "Для внешнего распознавания потребуется consent; ручной ввод всегда доступен.",
-            show_alert=True,
-        )
+        await callback.answer("Некорректный способ ввода.", show_alert=True)
         return
     try:
         draft = await services.next_run.start_check_in(
@@ -118,6 +143,87 @@ async def choose_method(callback: CallbackQuery, services: AppServices) -> None:
     if callback.message is not None:
         await _ask_field(callback.message, draft, "overall_readiness")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("next:consent:"))
+async def readiness_consent(callback: CallbackQuery, services: AppServices) -> None:
+    parts = (callback.data or "").split(":")
+    try:
+        action = parts[2]
+        phase = CheckInPhase(parts[3])
+        method = parts[4]
+        if action not in {"yes", "no"} or method not in {"text", "voice"}:
+            raise ValueError
+    except (ValueError, IndexError):
+        await callback.answer("Некорректный callback.", show_alert=True)
+        return
+    if action == "no":
+        if callback.message is not None:
+            await callback.message.answer(
+                "Внешняя обработка не включена. Продолжите ручной ввод.",
+                reply_markup=check_in_method_keyboard(phase.value),
+            )
+        await callback.answer()
+        return
+    try:
+        task = AiTask.READINESS_EXTRACTION if method == "text" else AiTask.VOICE_TRANSCRIPTION
+        request = await services.assisted.accept_consent(_callback_identity(callback), task=task)
+    except AssistedError as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    if request.notify_owner and callback.bot is not None:
+        owner_id = services.assisted.owner_telegram_user_id
+        if owner_id is not None:
+            await callback.bot.send_message(
+                owner_id,
+                "Запрос external AI access: "
+                f"user <code>{request.telegram_user_id}</code>, "
+                f"display name {escape(request.display_name)}.",
+            )
+            await services.assisted.mark_notification_sent(request.telegram_user_id)
+    if request.status == ExternalAiAccessStatus.ALLOWED:
+        await _begin_ai_input(callback, services, phase, method)
+        return
+    if callback.message is not None:
+        await callback.message.answer(
+            "Согласие сохранено; требуется owner approval. Ручной ввод уже доступен.",
+            reply_markup=check_in_method_keyboard(phase.value),
+        )
+    await callback.answer()
+
+
+@router.message(F.voice)
+async def readiness_voice(message: Message, services: AppServices) -> None:
+    if message.from_user is None or message.voice is None:
+        return
+    pending = await services.ai_readiness.pending(message.from_user.id, "ai_voice")
+    if pending is None:
+        await message.answer("Сначала откройте /next и выберите голосовой ввод.")
+        return
+    if (
+        message.voice.file_size is not None
+        and message.voice.file_size > services.ai_readiness.max_audio_bytes
+    ):
+        await message.answer("Голосовое сообщение слишком большое. Продолжите ручной ввод.")
+        return
+    if message.bot is None:
+        await message.answer("Telegram bot недоступен.")
+        return
+    try:
+        buffer = BytesIO()
+        await message.bot.download(message.voice, destination=buffer)
+        draft = await services.ai_readiness.extract_voice(
+            message.from_user.id,
+            pending.check_in_id,
+            buffer.getvalue(),
+            "audio/ogg",
+        )
+    except (AiError, AssistedError, ReadinessError) as error:
+        await message.answer(
+            f"Не удалось распознать голос: {escape(str(error))}. Ручной ввод доступен."
+        )
+        return
+    await message.answer(format_check_in(draft), reply_markup=preview_keyboard(draft))
 
 
 @router.callback_query(F.data.startswith("next:f:"))
@@ -133,7 +239,7 @@ async def set_field(callback: CallbackQuery, services: AppServices) -> None:
     if callback.message is not None:
         if next_field is None:
             await callback.message.answer(
-                format_check_in(updated), reply_markup=preview_keyboard(updated.check_in_id)
+                format_check_in(updated), reply_markup=preview_keyboard(updated)
             )
         else:
             await _ask_field(callback.message, updated, next_field)
@@ -165,9 +271,7 @@ async def clear_field(callback: CallbackQuery, services: AppServices) -> None:
         await callback.answer(str(error), show_alert=True)
         return
     if callback.message is not None:
-        await callback.message.answer(
-            format_check_in(draft), reply_markup=preview_keyboard(draft.check_in_id)
-        )
+        await callback.message.answer(format_check_in(draft), reply_markup=preview_keyboard(draft))
     await callback.answer("Очищено")
 
 
@@ -233,8 +337,39 @@ async def revise(callback: CallbackQuery, services: AppServices) -> None:
         await callback.answer(str(error), show_alert=True)
         return
     if callback.message is not None:
+        await callback.message.answer(format_check_in(draft), reply_markup=preview_keyboard(draft))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("next:change-time:"))
+async def change_available_time(callback: CallbackQuery, services: AppServices) -> None:
+    try:
+        recommendation_id = uuid.UUID(hex=(callback.data or "").split(":", 2)[2])
+        draft = await services.next_run.revision_draft(callback.from_user.id, recommendation_id)
+    except (CoachError, ReadinessError, ValueError) as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    if callback.message is not None:
+        await _ask_field(callback.message, draft, "available_time_sec")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("next:recalc:"))
+async def recalculate(callback: CallbackQuery, services: AppServices) -> None:
+    try:
+        recommendation_id = uuid.UUID(hex=(callback.data or "").split(":", 2)[2])
+        result = await services.next_run.recalculate(
+            callback.from_user.id,
+            recommendation_id,
+            idempotency_key=f"telegram-recalc:{callback.id}",
+        )
+    except (CoachError, ReadinessError, ValueError) as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    if callback.message is not None:
         await callback.message.answer(
-            format_check_in(draft), reply_markup=preview_keyboard(draft.check_in_id)
+            "Входы не менялись; создана новая audit revision.\n\n" + result.message,
+            reply_markup=recommendation_keyboard(result.recommendation_id),
         )
     await callback.answer()
 
@@ -280,7 +415,7 @@ async def _render_state(message: Message | InaccessibleMessage, result: NextFlow
     elif result.state == NextFlowState.EDIT_CHECK_IN and result.check_in is not None:
         await message.answer(
             format_check_in(result.check_in),
-            reply_markup=preview_keyboard(result.check_in.check_in_id),
+            reply_markup=preview_keyboard(result.check_in),
         )
     elif result.state in {NextFlowState.SHOW_PROVISIONAL, NextFlowState.SHOW_CONFIRMED}:
         assert result.recommendation is not None
@@ -422,7 +557,11 @@ def _next_field(draft: ReadinessDraft, field: str, raw: str) -> str | None:
     if field == "motivation":
         return "available_time_sec"
     if field == "available_time_sec":
-        return "session_rpe" if draft.phase == CheckInPhase.POST_RUN else None
+        return (
+            "session_rpe"
+            if draft.phase == CheckInPhase.POST_RUN and draft.linked_activity_id is not None
+            else None
+        )
     return None
 
 
@@ -505,3 +644,46 @@ def _message_user_id(message: Message) -> int:
     if message.from_user is None:
         raise CoachError("Не удалось определить пользователя.")
     return message.from_user.id
+
+
+async def _begin_ai_input(
+    callback: CallbackQuery,
+    services: AppServices,
+    phase: CheckInPhase,
+    method: str,
+) -> None:
+    source = CheckInInputSource.AI_TEXT if method == "text" else CheckInInputSource.AI_VOICE
+    try:
+        draft = await services.next_run.start_check_in(
+            callback.from_user.id,
+            phase,
+            source=source,
+        )
+        await services.readiness.set_pending_field(
+            callback.from_user.id,
+            draft.check_in_id,
+            "ai_text" if method == "text" else "ai_voice",
+        )
+    except (CoachError, ReadinessError) as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+    if callback.message is not None:
+        await callback.message.answer(
+            "Опишите текущее самочувствие одним сообщением."
+            if method == "text"
+            else "Отправьте одно голосовое сообщение о текущем самочувствии."
+        )
+    await callback.answer()
+
+
+def _callback_identity(callback: CallbackQuery) -> TelegramIdentity:
+    chat_id = callback.from_user.id
+    if callback.message is not None:
+        chat_id = callback.message.chat.id
+    return TelegramIdentity(
+        telegram_user_id=callback.from_user.id,
+        private_chat_id=chat_id,
+        username=callback.from_user.username,
+        first_name=callback.from_user.first_name,
+        last_name=callback.from_user.last_name,
+    )

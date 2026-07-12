@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -137,6 +138,31 @@ def test_sparse_history_and_missing_sleep_stay_conservative_without_penalty() ->
     assert result.prescription.distance_m is None
     assert result.quality.sleep == 0
     assert result.quality.readiness == 1
+
+
+def test_stale_sleep_is_not_used_as_recovery_signal() -> None:
+    baseline = calculate_adaptive_recommendation(
+        regular_history(),
+        RunningGoalType.GENERAL_ENDURANCE,
+        ready(),
+        as_of=NOW,
+        timezone="UTC",
+    )
+    stale = calculate_adaptive_recommendation(
+        regular_history(),
+        RunningGoalType.GENERAL_ENDURANCE,
+        replace(
+            ready(),
+            sleep_quality=5,
+            sleep_duration_sec=28_800,
+            sleep_ended_at=NOW - timedelta(hours=40),
+        ),
+        as_of=NOW,
+        timezone="UTC",
+    )
+
+    assert stale.quality.sleep == 0
+    assert stale.state.readiness_score == baseline.state.readiness_score
 
 
 @pytest.mark.parametrize(
