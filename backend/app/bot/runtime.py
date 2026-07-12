@@ -14,6 +14,7 @@ from aiogram.types import (
 
 from app.bot.group_handlers import router as group_router
 from app.bot.handlers import router
+from app.bot.next_handlers import router as next_router
 from app.jobs.monthly import MonthlyReportJob
 from app.services import AppServices
 
@@ -38,6 +39,7 @@ class BotRuntime:
     def __init__(self, token: str, services: AppServices, *, outbox_poll_seconds: int = 5) -> None:
         self.bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         self.dispatcher = Dispatcher()
+        self.dispatcher.include_router(next_router)
         self.dispatcher.include_router(router)
         self.dispatcher.include_router(group_router)
         self.services = services

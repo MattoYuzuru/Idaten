@@ -3,27 +3,23 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.activities.service import ActivityService
-from app.assisted.provider import (
-    ActivityExtractionProvider,
-    ExtractionProviderName,
-    NoneActivityExtractionProvider,
-    OpenAIActivityExtractionProvider,
-)
+from app.ai.contracts import AiRoute, AiTask
+from app.ai.providers.openai import OpenAiProvider
+from app.ai.registry import AiRegistry
+from app.ai.router import AiRouter
+from app.ai.service import AiReadinessInputService
 from app.assisted.service import AssistedActivityService
-from app.coach.provider import (
-    JsonHttpWordingProvider,
-    LLMProviderName,
-    NoneWordingProvider,
-    ProviderExecutor,
-    WordingProvider,
-)
+from app.coach.adaptive_service import NextRunService
+from app.coach.lifecycle import RecommendationLifecycle
 from app.coach.service import CoachService
 from app.core.config import Settings
+from app.goals.service import GoalService
 from app.groups.monthly_service import MonthlyReportService
 from app.groups.service import GroupService
 from app.health_connect.outbox import TelegramOutboxService
 from app.health_connect.service import HealthConnectService
 from app.ingestion.service import ImportService
+from app.readiness.service import ReadinessService
 from app.storage.service import LocalFilesystemStorage
 from app.users.service import UserService
 
@@ -39,6 +35,10 @@ class AppServices:
     coach: CoachService
     monthly: MonthlyReportService
     assisted: AssistedActivityService
+    goals: GoalService
+    readiness: ReadinessService
+    next_run: NextRunService
+    ai_readiness: AiReadinessInputService
 
 
 def build_services(
@@ -50,6 +50,7 @@ def build_services(
         default_locale=settings.default_locale,
     )
     storage = LocalFilesystemStorage(settings.storage_path)
+    recommendation_lifecycle = RecommendationLifecycle()
     health_connect = HealthConnectService(
         session_factory,
         users,
@@ -59,66 +60,65 @@ def build_services(
         link_attempt_limit=settings.health_connect_link_attempt_limit,
         link_attempt_window_seconds=settings.health_connect_link_attempt_window_seconds,
         max_batch_size=settings.health_connect_max_batch_size,
+        recommendation_lifecycle=recommendation_lifecycle,
     )
-    provider_name = LLMProviderName(settings.llm_provider.upper())
-    endpoints = {
-        LLMProviderName.OPENAI: "https://api.openai.com/v1/chat/completions",
-        LLMProviderName.GEMINI: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        LLMProviderName.DEEPSEEK: "https://api.deepseek.com/chat/completions",
-        LLMProviderName.OPENROUTER: "https://openrouter.ai/api/v1/chat/completions",
-        LLMProviderName.OLLAMA: "http://localhost:11434/api/chat",
-    }
-    provider: WordingProvider
-    if provider_name == LLMProviderName.NONE or not settings.llm_model.strip():
-        provider = NoneWordingProvider()
-    else:
-        provider = JsonHttpWordingProvider(
-            provider_name,
-            settings.llm_model,
-            settings.llm_endpoint or endpoints[provider_name],
-            settings.wording_api_key,
-            request_timeout_seconds=settings.llm_timeout_seconds,
+    coach = CoachService(session_factory)
+    ai_registry = AiRegistry()
+    if settings.ai_api_key:
+        ai_registry.register(
+            OpenAiProvider(
+                settings.ai_api_key,
+                settings.ai_openai_endpoint,
+                request_timeout_seconds=settings.ai_timeout_seconds,
+            )
         )
-    coach = CoachService(
-        session_factory,
-        ProviderExecutor(
-            provider,
-            timeout_seconds=settings.llm_timeout_seconds,
-            retries=settings.llm_retries,
-        ),
+    ai_router = AiRouter(
+        ai_registry,
+        {
+            AiTask.ACTIVITY_EXTRACTION: AiRoute(
+                settings.ai_task_activity_extraction_provider.strip()
+                or settings.ai_default_provider,
+                settings.ai_task_activity_extraction_model,
+            ),
+            AiTask.READINESS_EXTRACTION: AiRoute(
+                settings.ai_task_readiness_extraction_provider.strip()
+                or settings.ai_default_provider,
+                settings.ai_task_readiness_extraction_model,
+            ),
+            AiTask.VOICE_TRANSCRIPTION: AiRoute(
+                settings.ai_task_voice_transcription_provider.strip()
+                or settings.ai_default_provider,
+                settings.ai_task_voice_transcription_model,
+            ),
+        },
+        enabled=settings.ai_enabled,
+        timeout_seconds=settings.ai_timeout_seconds,
+        retries=settings.ai_retries,
     )
-    extraction_provider: ActivityExtractionProvider = NoneActivityExtractionProvider()
-    extraction_provider_name = ExtractionProviderName(settings.activity_extraction_provider.upper())
-    if (
-        extraction_provider_name == ExtractionProviderName.OPENAI
-        and settings.extraction_api_key
-        and settings.activity_extraction_model.strip()
-    ):
-        extraction_provider = OpenAIActivityExtractionProvider(
-            settings.activity_extraction_model,
-            settings.extraction_api_key,
-            settings.activity_extraction_endpoint,
-            request_timeout_seconds=settings.activity_extraction_timeout_seconds,
-        )
     assisted = AssistedActivityService(
         session_factory,
         users,
-        extraction_provider,
-        enabled=(
-            settings.activity_extraction_enabled and settings.bot_owner_telegram_id is not None
-        ),
+        ai_router,
+        enabled=settings.ai_enabled and settings.bot_owner_telegram_id is not None,
         owner_telegram_user_id=settings.bot_owner_telegram_id,
-        max_text_chars=settings.activity_extraction_max_text_chars,
-        max_image_bytes=settings.activity_extraction_max_image_bytes,
-        max_image_pixels=settings.activity_extraction_max_image_pixels,
-        daily_user_limit=settings.activity_extraction_daily_user_limit,
-        monthly_global_limit=settings.activity_extraction_monthly_global_limit,
-        timeout_seconds=settings.activity_extraction_timeout_seconds,
-        retries=settings.activity_extraction_retries,
+        max_text_chars=settings.ai_max_text_chars,
+        max_image_bytes=settings.ai_max_image_bytes,
+        max_image_pixels=settings.ai_max_image_pixels,
+        daily_user_limit=settings.ai_daily_user_limit,
+        monthly_global_limit=settings.ai_monthly_global_limit,
+    )
+    readiness = ReadinessService(session_factory)
+    ai_readiness = AiReadinessInputService(
+        session_factory,
+        ai_router,
+        assisted,
+        readiness,
+        max_text_chars=settings.ai_max_text_chars,
+        max_audio_bytes=settings.ai_max_audio_bytes,
     )
     return AppServices(
         users=users,
-        activities=ActivityService(session_factory, users),
+        activities=ActivityService(session_factory, users, recommendation_lifecycle),
         groups=GroupService(session_factory),
         imports=ImportService(
             session_factory,
@@ -128,10 +128,15 @@ def build_services(
             max_archive_uncompressed_bytes=settings.max_archive_uncompressed_bytes,
             max_archive_entries=settings.max_archive_entries,
             max_archive_ratio=settings.max_archive_ratio,
+            recommendation_lifecycle=recommendation_lifecycle,
         ),
         health_connect=health_connect,
         outbox=TelegramOutboxService(session_factory),
         coach=coach,
         monthly=MonthlyReportService(session_factory),
         assisted=assisted,
+        goals=GoalService(session_factory),
+        readiness=readiness,
+        next_run=NextRunService(session_factory, health_connect),
+        ai_readiness=ai_readiness,
     )

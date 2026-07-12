@@ -77,6 +77,39 @@ def test_link_sync_status_and_safe_item_error(tmp_path: Path) -> None:
         token = completed.json()["token"]
         assert client.get("/health-connect/sync/status").status_code == 401
 
+        sleep_payload = {
+            "external_id": "sleep-api-1",
+            "started_at": "2026-07-11T21:00:00Z",
+            "ended_at": "2026-07-12T05:00:00Z",
+            "duration_sec": 28_800,
+            "data_origin": "com.samsung.health",
+            "observed_at": "2026-07-12T06:00:00Z",
+        }
+        assert client.post("/health-connect/sync/sleep", json=sleep_payload).status_code == 401
+        sleep = client.post(
+            "/health-connect/sync/sleep",
+            headers={"Authorization": f"Bearer {token}"},
+            json=sleep_payload,
+        )
+        assert sleep.status_code == 200
+        assert sleep.json()["created"] is True
+        repeated_sleep = client.post(
+            "/health-connect/sync/sleep",
+            headers={"Authorization": f"Bearer {token}"},
+            json=sleep_payload,
+        )
+        assert repeated_sleep.status_code == 200
+        assert repeated_sleep.json() == {
+            "summary_id": sleep.json()["summary_id"],
+            "created": False,
+        }
+        raw_stages = client.post(
+            "/health-connect/sync/sleep",
+            headers={"Authorization": f"Bearer {token}"},
+            json={**sleep_payload, "stages": []},
+        )
+        assert raw_stages.status_code == 422
+
         sync = client.post(
             "/health-connect/sync/activities",
             headers={"Authorization": f"Bearer {token}"},

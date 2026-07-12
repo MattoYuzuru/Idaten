@@ -24,9 +24,9 @@ class ProvisionProductionTest(unittest.TestCase):
                 "POSTGRES_PASSWORD='p@ss:/?#[]'\n"
                 f"HEALTH_CONNECT_SECURITY_PEPPER='{'x' * 32}'\n"
                 "IMPORT_API_TOKEN='import'\n"
-                "ACTIVITY_EXTRACTION_ENABLED='true'\n"
-                "ACTIVITY_EXTRACTION_PROVIDER='OPENAI'\n"
-                "ACTIVITY_EXTRACTION_DAILY_USER_LIMIT='5'\n",
+                "AI_ENABLED='true'\n"
+                "AI_DEFAULT_PROVIDER='OPENAI'\n"
+                "AI_DAILY_USER_LIMIT='5'\n",
             )
             path.chmod(0o600)
             values = MODULE.parse_secret_file(path)
@@ -40,13 +40,11 @@ class ProvisionProductionTest(unittest.TestCase):
             )
             self.assertEqual(
                 "true",
-                base64.b64decode(manifest["data"]["ACTIVITY_EXTRACTION_ENABLED"]).decode(),
+                base64.b64decode(manifest["data"]["AI_ENABLED"]).decode(),
             )
             self.assertEqual(
                 "5",
-                base64.b64decode(
-                    manifest["data"]["ACTIVITY_EXTRACTION_DAILY_USER_LIMIT"]
-                ).decode(),
+                base64.b64decode(manifest["data"]["AI_DAILY_USER_LIMIT"]).decode(),
             )
 
     def test_parser_rejects_permissive_file_mode(self) -> None:

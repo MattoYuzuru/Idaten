@@ -2,6 +2,7 @@ import gzip
 import json
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from app.health_connect.models import (
     DeviceLinkAttempt,
     DeviceLinkCode,
     DeviceScope,
+    HealthConnectSleepSummary,
     HealthConnectSyncBatch,
     OutboxStatus,
     TelegramOutbox,
@@ -29,9 +31,11 @@ from app.health_connect.schemas import (
     HealthConnectError,
     HealthConnectRun,
     HealthConnectSample,
+    HealthConnectSleep,
     SyncItemState,
 )
 from app.ingestion.models import ActivitySeries
+from app.readiness.domain import CheckInInputSource, CheckInPhase
 from app.services import AppServices, build_services
 from app.users.schemas import TelegramIdentity
 
@@ -100,6 +104,98 @@ async def linked(
         device_model="Pixel 9",
     )
     return device.token, device.device_id
+
+
+@pytest.mark.asyncio
+async def test_sleep_sync_is_idempotent_and_fresh_longest_prefills_readiness(
+    health_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, session_factory = health_context
+    token, _device_id = await linked(services)
+    now = datetime(2026, 7, 12, 8, tzinfo=UTC)
+    shorter = HealthConnectSleep(
+        external_id="sleep-short",
+        started_at=now - timedelta(hours=7),
+        ended_at=now - timedelta(hours=1),
+        duration_sec=6 * 3_600,
+        data_origin="com.samsung.health",
+        observed_at=now,
+    )
+    longest = HealthConnectSleep(
+        external_id="sleep-long",
+        started_at=now - timedelta(hours=9),
+        ended_at=now - timedelta(hours=1),
+        duration_sec=8 * 3_600,
+        data_origin="com.samsung.health",
+        observed_at=now,
+    )
+
+    first = await services.health_connect.sync_sleep(token, shorter, moment=now)
+    await services.health_connect.sync_sleep(token, longest, moment=now)
+    repeated = await services.health_connect.sync_sleep(token, shorter, moment=now)
+    draft = await services.next_run.start_check_in(42, CheckInPhase.POST_RUN, moment=now)
+
+    assert first.created
+    assert not repeated.created
+    assert repeated.summary_id == first.summary_id
+    assert draft.source == CheckInInputSource.HEALTH_CONNECT
+    assert draft.values.sleep_duration_sec == 8 * 3_600
+    assert draft.values.sleep_quality is None
+    assert draft.values.sleep_summary_id is not None
+    assert draft.values.sleep_ended_at == longest.ended_at
+    edited = await services.readiness.update(
+        42,
+        draft.check_in_id,
+        replace(draft.values, overall_readiness=4),
+        expected_version=draft.version,
+    )
+    assert edited.source == CheckInInputSource.MERGED
+    cleared = await services.readiness.clear_optional(42, draft.check_in_id, "sleep")
+    assert cleared.source == CheckInInputSource.MANUAL
+    assert cleared.values.sleep_summary_id is None
+    assert cleared.values.sleep_duration_sec is None
+    async with session_factory() as session:
+        summaries = tuple((await session.scalars(select(HealthConnectSleepSummary))).all())
+    assert len(summaries) == 2
+    assert not hasattr(summaries[0], "stages")
+    assert not hasattr(summaries[0], "raw_payload")
+
+
+@pytest.mark.asyncio
+async def test_stale_or_incomplete_sleep_does_not_prefill_and_revoke_rejects_sync(
+    health_context: tuple[AppServices, async_sessionmaker[AsyncSession]],
+) -> None:
+    services, _session_factory = health_context
+    token, device_id = await linked(services)
+    now = datetime(2026, 7, 12, 8, tzinfo=UTC)
+    await services.health_connect.sync_sleep(
+        token,
+        HealthConnectSleep(
+            external_id="stale",
+            started_at=now - timedelta(hours=48),
+            ended_at=now - timedelta(hours=40),
+            duration_sec=8 * 3_600,
+        ),
+        moment=now,
+    )
+    await services.health_connect.sync_sleep(
+        token,
+        HealthConnectSleep(external_id="missing-values"),
+        moment=now,
+    )
+
+    draft = await services.next_run.start_check_in(42, CheckInPhase.POST_RUN, moment=now)
+
+    assert draft.source == CheckInInputSource.MANUAL
+    assert draft.values.sleep_duration_sec is None
+    await services.health_connect.revoke_for_user(42, device_id)
+    with pytest.raises(HealthConnectError) as revoked:
+        await services.health_connect.sync_sleep(
+            token,
+            HealthConnectSleep(external_id="after-revoke"),
+            moment=now,
+        )
+    assert revoked.value.code == "TOKEN_REVOKED"
 
 
 @pytest.mark.asyncio

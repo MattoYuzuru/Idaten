@@ -11,6 +11,7 @@ from .models import (
     Device,
     DeviceLinkAttempt,
     DeviceLinkCode,
+    HealthConnectSleepSummary,
     HealthConnectSyncBatch,
     OutboxStatus,
     TelegramOutbox,
@@ -87,6 +88,48 @@ class HealthConnectRepository:
                 select(HealthConnectSyncBatch).where(HealthConnectSyncBatch.batch_key == batch_key)
             )
         ).scalar_one_or_none()
+
+    async def sleep_summary(
+        self,
+        device_id: uuid.UUID,
+        external_id: str,
+        *,
+        for_update: bool = False,
+    ) -> HealthConnectSleepSummary | None:
+        statement = select(HealthConnectSleepSummary).where(
+            HealthConnectSleepSummary.device_id == device_id,
+            HealthConnectSleepSummary.external_id == external_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return (await self.session.execute(statement)).scalar_one_or_none()
+
+    async def fresh_sleep_prefill(
+        self,
+        user_id: uuid.UUID,
+        *,
+        ended_from: datetime,
+        ended_through: datetime,
+    ) -> HealthConnectSleepSummary | None:
+        statement = (
+            select(HealthConnectSleepSummary)
+            .where(
+                HealthConnectSleepSummary.user_id == user_id,
+                HealthConnectSleepSummary.ended_at.is_not(None),
+                HealthConnectSleepSummary.ended_at >= ended_from,
+                HealthConnectSleepSummary.ended_at <= ended_through,
+                HealthConnectSleepSummary.duration_sec.is_not(None),
+                HealthConnectSleepSummary.duration_sec > 0,
+                HealthConnectSleepSummary.duration_sec <= 86_400,
+            )
+            .order_by(
+                HealthConnectSleepSummary.duration_sec.desc(),
+                HealthConnectSleepSummary.ended_at.desc(),
+                HealthConnectSleepSummary.id,
+            )
+            .limit(1)
+        )
+        return (await self.session.execute(statement)).scalar_one_or_none()
 
     async def pending_outbox(
         self, now: datetime, *, lease_before: datetime, limit: int

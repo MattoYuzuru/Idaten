@@ -22,20 +22,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.activities.domain import SourceType as SourceType
 from app.db.base import Base, TimestampMixin
-
-
-class SourceType(StrEnum):
-    MANUAL = "MANUAL"
-    HEALTH_CONNECT = "HEALTH_CONNECT"
-    STRAVA = "STRAVA"
-    GPX = "GPX"
-    FIT = "FIT"
-    TCX = "TCX"
-    CSV = "CSV"
-    TEXT = "TEXT"
-    SCREENSHOT = "SCREENSHOT"
-    SAMSUNG_EXPORT = "SAMSUNG_EXPORT"
 
 
 class SourceStatus(StrEnum):

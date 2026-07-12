@@ -25,9 +25,11 @@ from app.activities.schemas import (
     PossibleDuplicateError,
     RecordedRun,
 )
-from app.assisted.models import AssistedAccessStatus
+from app.ai.contracts import AiError
+from app.assisted.models import ExternalAiAccessStatus
 from app.assisted.schemas import AccessRequestResult, AssistedError, InputGateStatus
 from app.bot.messages import (
+    EXTERNAL_AI_CONSENT_TEXT,
     HELP_SECTIONS,
     HELP_TEXT,
     REPOSITORY_URL,
@@ -38,10 +40,12 @@ from app.bot.messages import (
     format_run_history,
     format_stats,
 )
-from app.coach.schemas import CoachError
+from app.bot.next_keyboards import after_run_keyboard, preview_keyboard
+from app.coach.next_messages import format_check_in
 from app.groups.schemas import GroupError, PrivacyGroupAction, PrivacyOverview, ShareTarget
 from app.health_connect.schemas import HealthConnectError
 from app.ingestion.schemas import ImportError, ImportPreview
+from app.readiness.schemas import ReadinessError
 from app.services import AppServices
 from app.users.schemas import TelegramIdentity
 
@@ -149,7 +153,7 @@ async def _send_run_result(
     *,
     telegram_user_id: int | None = None,
 ) -> None:
-    await message.answer(result.report_message)
+    await message.answer(result.report_message, reply_markup=after_run_keyboard())
     targets = await services.groups.share_targets(
         telegram_user_id or identity_from_message(message).telegram_user_id,
         result.activity.activity_id,
@@ -182,16 +186,6 @@ async def stats(message: Message, services: AppServices) -> None:
     await message.answer(format_stats(result))
 
 
-@router.message(Command("next"))
-async def next_workout(message: Message, services: AppServices) -> None:
-    try:
-        result = await services.coach.next_workout(identity_from_message(message).telegram_user_id)
-    except CoachError as error:
-        await message.answer(str(error))
-        return
-    await message.answer(result.message)
-
-
 @router.message(Command("ai_access"))
 async def ai_access(message: Message, command: CommandObject, services: AppServices) -> None:
     parts = (command.args or "").split()
@@ -219,7 +213,10 @@ async def ai_access(message: Message, command: CommandObject, services: AppServi
         f"consent={'yes' if overview.consent_current else 'no'}"
     )
     if parts[0] == "grant" and message.bot is not None:
-        await message.bot.send_message(target_id, "Доступ к вводу текстом и скриншотом открыт.")
+        await message.bot.send_message(
+            target_id,
+            "Доступ к external AI вводу текстом, изображением и голосом открыт.",
+        )
 
 
 @router.message(Command("pr"))
@@ -646,9 +643,6 @@ async def menu_callback(callback: CallbackQuery, services: AppServices) -> None:
         elif action == "stats":
             stats = await services.activities.stats(user_id)
             await callback.message.answer(format_stats(stats))
-        elif action == "next":
-            next_result = await services.coach.next_workout(user_id)
-            await callback.message.answer(next_result.message)
         elif action == "privacy":
             overview = await services.groups.privacy_overview(user_id)
             await callback.message.answer(
@@ -733,11 +727,8 @@ async def _begin_assisted(
     identity = _identity_from_callback(callback)
     gate = await services.assisted.gate(identity, method)
     if gate.status == InputGateStatus.CONSENT_REQUIRED:
-        label = "текст" if method == DraftInputMethod.TEXT else "изображение"
         await message.answer(
-            "Для распознавания Idaten передаст внешний provider только текущие "
-            f"{label} и timezone. Данные профиля, история, GPS и Telegram identity "
-            "не передаются. Исходное содержимое не сохраняется на VPS.",
+            EXTERNAL_AI_CONSENT_TEXT,
             reply_markup=_consent_keyboard(method),
         )
         return
@@ -781,7 +772,7 @@ async def _notify_access_owner(
     username = f"@{escape(request.username)}" if request.username else "без username"
     await callback.bot.send_message(
         owner_chat_id,
-        "<b>Запрошен доступ к распознаванию тренировок</b>\n\n"
+        "<b>Запрошен доступ к external AI input</b>\n\n"
         f"{escape(request.display_name)} · {username}\n"
         f"Telegram ID: <code>{request.telegram_user_id}</code>",
         reply_markup=_access_keyboard(request.telegram_user_id),
@@ -809,9 +800,9 @@ async def assisted_consent_callback(callback: CallbackQuery, services: AppServic
         request = await services.assisted.accept_consent(_identity_from_callback(callback))
         if request.notify_owner:
             await _notify_access_owner(callback, services, request)
-        if request.status == AssistedAccessStatus.ALLOWED:
+        if request.status == ExternalAiAccessStatus.ALLOWED:
             await _start_assisted_prompt(callback.message, callback.from_user.id, services, method)
-        elif request.status == AssistedAccessStatus.REVOKED:
+        elif request.status == ExternalAiAccessStatus.REVOKED:
             await callback.message.edit_text("Доступ к этой функции отозван владельцем бота.")
         else:
             await callback.message.edit_text(
@@ -836,9 +827,10 @@ async def assisted_admin_callback(callback: CallbackQuery, services: AppServices
         overview = await services.assisted.decide_access(
             callback.from_user.id, target_id, allow=action == "grant"
         )
-        if callback.bot is not None and overview.status == AssistedAccessStatus.ALLOWED:
+        if callback.bot is not None and overview.status == ExternalAiAccessStatus.ALLOWED:
             await callback.bot.send_message(
-                target_id, "Доступ к вводу текстом и скриншотом открыт."
+                target_id,
+                "Доступ к external AI вводу текстом, изображением и голосом открыт.",
             )
     except (AssistedError, ValueError) as error:
         await callback.answer(str(error), show_alert=True)
@@ -919,6 +911,23 @@ async def manual_draft_callback(callback: CallbackQuery, services: AppServices) 
 @router.message(F.text)
 async def manual_draft_reply(message: Message, services: AppServices) -> None:
     if message.from_user is None or message.text is None or message.text.startswith("/"):
+        return
+    ai_pending = await services.ai_readiness.pending(message.from_user.id, "ai_text")
+    if ai_pending is not None:
+        try:
+            updated_ai = await services.ai_readiness.extract_text(
+                message.from_user.id, ai_pending.check_in_id, message.text
+            )
+        except (AiError, AssistedError, ReadinessError) as error:
+            await message.answer(
+                f"Не удалось распознать описание: {escape(str(error))}. "
+                "Продолжите ручной ввод через /next."
+            )
+            return
+        await message.answer(
+            format_check_in(updated_ai),
+            reply_markup=preview_keyboard(updated_ai),
+        )
         return
     try:
         pending = await services.activities.pending_manual_draft(message.from_user.id)

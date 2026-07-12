@@ -1,11 +1,21 @@
 from dataclasses import dataclass
-from datetime import date, time
 from enum import StrEnum
 
 from app.activities.models import DraftInputMethod
-from app.assisted.models import AssistedAccessStatus
+from app.ai.schemas import (
+    ActivityExtractionRequest as ExtractionRequest,
+)
+from app.ai.schemas import (
+    ActivityExtractionResult as ExtractionResult,
+)
+from app.ai.schemas import (
+    ExtractedRun as ExtractedRun,
+)
+from app.assisted.models import ExternalAiAccessStatus
 
-CONSENT_VERSION = "activity-extraction-v1"
+__all__ = ["ExtractedRun", "ExtractionRequest", "ExtractionResult"]
+
+CONSENT_VERSION = "wellbeing-external-ai-v2"
 
 
 class AssistedError(ValueError):
@@ -30,7 +40,7 @@ class InputGate:
 
 @dataclass(frozen=True, slots=True)
 class AccessRequestResult:
-    status: AssistedAccessStatus
+    status: ExternalAiAccessStatus
     notify_owner: bool
     telegram_user_id: int
     display_name: str
@@ -40,36 +50,5 @@ class AccessRequestResult:
 @dataclass(frozen=True, slots=True)
 class AccessOverview:
     telegram_user_id: int
-    status: AssistedAccessStatus | None
+    status: ExternalAiAccessStatus | None
     consent_current: bool
-
-
-@dataclass(frozen=True, slots=True)
-class ExtractionRequest:
-    method: DraftInputMethod
-    timezone: str
-    local_date: date
-    text: str | None = None
-    image: bytes | None = None
-    media_type: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ExtractedRun:
-    is_run: bool
-    local_date: date | None
-    local_time: time | None
-    distance_m: int | None
-    elapsed_time_sec: int | None
-    moving_time_sec: int | None = None
-    avg_hr: int | None = None
-    max_hr: int | None = None
-    avg_cadence_spm: int | None = None
-    elevation_gain_m: int | None = None
-    title: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ExtractionResult:
-    run: ExtractedRun
-    provider_request_id: str | None

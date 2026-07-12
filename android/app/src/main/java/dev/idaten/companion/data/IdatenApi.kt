@@ -1,6 +1,7 @@
 package dev.idaten.companion.data
 
 import dev.idaten.companion.model.SyncActivityDto
+import dev.idaten.companion.model.SyncSleepDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -63,6 +64,12 @@ data class SyncCounts(
 )
 
 @Serializable
+data class SleepSyncResponse(
+    @SerialName("summary_id") val summaryId: String,
+    val created: Boolean,
+)
+
+@Serializable
 data class DeviceStatusResponse(
     @SerialName("device_id") val deviceId: String,
     val name: String,
@@ -99,6 +106,11 @@ interface IdatenApi {
         token: String,
         request: SyncRequest,
     ): SyncResponse
+
+    suspend fun syncSleep(
+        token: String,
+        request: SyncSleepDto,
+    ): SleepSyncResponse
 }
 
 class OkHttpIdatenApi(
@@ -125,6 +137,11 @@ class OkHttpIdatenApi(
         token: String,
         request: SyncRequest,
     ): SyncResponse = post("/health-connect/sync/activities", json.encodeToString(request), token)
+
+    override suspend fun syncSleep(
+        token: String,
+        request: SyncSleepDto,
+    ): SleepSyncResponse = post("/health-connect/sync/sleep", json.encodeToString(request), token)
 
     private suspend inline fun <reified T> post(
         path: String,

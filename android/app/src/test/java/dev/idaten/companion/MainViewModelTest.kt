@@ -7,6 +7,7 @@ import dev.idaten.companion.data.IdatenApi
 import dev.idaten.companion.data.InMemoryTokenStore
 import dev.idaten.companion.data.LinkCompleteRequest
 import dev.idaten.companion.data.LinkCompleteResponse
+import dev.idaten.companion.data.SleepSyncResponse
 import dev.idaten.companion.data.SyncCounts
 import dev.idaten.companion.data.SyncItemResponse
 import dev.idaten.companion.data.SyncRequest
@@ -17,6 +18,8 @@ import dev.idaten.companion.model.HealthAvailability
 import dev.idaten.companion.model.HealthRunSearchResult
 import dev.idaten.companion.model.PermissionState
 import dev.idaten.companion.model.RawHealthRun
+import dev.idaten.companion.model.RawHealthSleep
+import dev.idaten.companion.model.SyncSleepDto
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -58,6 +61,29 @@ class MainViewModelTest {
                 "cursor-1",
                 viewModel.state.value.status
                     ?.lastSyncCursor,
+            )
+        }
+
+    @Test
+    fun optionalSleepIsManuallySyncedWithoutAffectingRunReadiness() =
+        runTest {
+            val api = FakeApi()
+            val store = InMemoryTokenStore().apply { write("token") }
+            val health = FakeHealth().apply { granted = basePermissions + "sleep" }
+            val viewModel = MainViewModel(DeviceRepository(api, store, { "install" }), health)
+
+            assertEquals(HealthOnboardingState.READY, viewModel.state.value.healthState)
+            assertTrue(
+                viewModel.state.value.permissionState
+                    ?.sleepGranted == true,
+            )
+            viewModel.syncSleep().join()
+
+            assertEquals(1, api.sleepCalls)
+            assertTrue(
+                viewModel.state.value.backendMessage
+                    .orEmpty()
+                    .contains("Сон синхронизирован"),
             )
         }
 
@@ -211,8 +237,19 @@ class MainViewModelTest {
                 granted,
                 basePermissions,
                 routeGranted = false,
+                sleepPermission = "sleep",
             )
         }
+
+        override suspend fun latestSleep() =
+            RawHealthSleep(
+                externalId = "sleep-1",
+                startedAt = "2026-07-11T22:00:00Z",
+                endedAt = "2026-07-12T06:00:00Z",
+                durationSeconds = 28_800,
+                dataOrigin = "com.samsung.health",
+                observedAt = "2026-07-12T08:00:00Z",
+            )
 
         override suspend fun latestRuns(limit: Int): HealthRunSearchResult {
             readCalls += 1
@@ -251,10 +288,16 @@ class MainViewModelTest {
             token: String,
             request: SyncRequest,
         ): SyncResponse = error("not used")
+
+        override suspend fun syncSleep(
+            token: String,
+            request: SyncSleepDto,
+        ): SleepSyncResponse = error("not used")
     }
 
     private class FakeApi : IdatenApi {
         private var cursor: String? = null
+        var sleepCalls: Int = 0
 
         override suspend fun completeLink(request: LinkCompleteRequest) = LinkCompleteResponse("device", "token", "health_connect:sync")
 
@@ -277,6 +320,14 @@ class MainViewModelTest {
                 listOf(SyncItemResponse("hc-1", "saved", activityId = "activity")),
                 SyncCounts(saved = 1),
             )
+        }
+
+        override suspend fun syncSleep(
+            token: String,
+            request: SyncSleepDto,
+        ): SleepSyncResponse {
+            sleepCalls += 1
+            return SleepSyncResponse("sleep", true)
         }
     }
 }

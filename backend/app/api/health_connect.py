@@ -9,6 +9,7 @@ from app.health_connect.schemas import (
     HealthConnectError,
     HealthConnectRun,
     HealthConnectSample,
+    HealthConnectSleep,
     HealthConnectSplit,
 )
 from app.services import AppServices
@@ -77,6 +78,18 @@ class SyncRequest(BaseModel):
     skipped_count: int = Field(default=0, ge=0, le=100)
     read_error_count: int = Field(default=0, ge=0, le=100)
     activities: tuple[RunRequest, ...]
+
+
+class SleepSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    external_id: str = Field(min_length=1, max_length=255)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    duration_sec: int | None = Field(default=None, ge=1, le=86_400)
+    sleep_quality: int | None = Field(default=None, ge=1, le=5)
+    data_origin: str | None = Field(default=None, min_length=1, max_length=255)
+    observed_at: datetime | None = None
 
 
 def get_services(request: Request) -> AppServices:
@@ -172,6 +185,31 @@ async def sync_status(services: Services, authorization: Authorization = None) -
         "last_sync_status": result.last_sync_status,
         "last_sync_error": result.last_sync_error,
     }
+
+
+@router.post("/sync/sleep")
+async def sync_sleep(
+    body: SleepSyncRequest,
+    services: Services,
+    authorization: Authorization = None,
+) -> dict[str, object]:
+    token = _bearer_token(authorization)
+    try:
+        result = await services.health_connect.sync_sleep(
+            token,
+            HealthConnectSleep(
+                external_id=body.external_id,
+                started_at=body.started_at,
+                ended_at=body.ended_at,
+                duration_sec=body.duration_sec,
+                sleep_quality=body.sleep_quality,
+                data_origin=body.data_origin,
+                observed_at=body.observed_at,
+            ),
+        )
+    except HealthConnectError as error:
+        raise _http_error(error) from error
+    return {"summary_id": str(result.summary_id), "created": result.created}
 
 
 def _run_from_request(run: RunRequest) -> HealthConnectRun:

@@ -19,6 +19,7 @@ from app.analytics.metrics import (
     format_local_week_period,
     local_week_bounds,
 )
+from app.coach.lifecycle import RecommendationLifecycle
 from app.coach.report_builder import build_after_run_report
 from app.ingestion.adapters.track import build_splits
 from app.ingestion.models import ActivitySeries, ActivitySplit
@@ -35,6 +36,7 @@ from .models import (
     DeviceLinkAttempt,
     DeviceLinkCode,
     DeviceScope,
+    HealthConnectSleepSummary,
     HealthConnectSyncBatch,
     SyncStatus,
     TelegramOutbox,
@@ -45,8 +47,11 @@ from .schemas import (
     DeviceSummary,
     HealthConnectError,
     HealthConnectRun,
+    HealthConnectSleep,
     LinkCode,
     LinkedDevice,
+    SleepPrefill,
+    SleepSyncResult,
     SyncBatchResult,
     SyncItemResult,
     SyncItemState,
@@ -63,6 +68,7 @@ class HealthConnectService:
         session_factory: async_sessionmaker[AsyncSession],
         user_service: UserService,
         storage: StorageService,
+        recommendation_lifecycle: RecommendationLifecycle | None = None,
         *,
         security_pepper: str | None,
         link_ttl_seconds: int,
@@ -73,6 +79,7 @@ class HealthConnectService:
         self.session_factory = session_factory
         self.user_service = user_service
         self.storage = storage
+        self.recommendation_lifecycle = recommendation_lifecycle or RecommendationLifecycle()
         self.security_pepper = security_pepper
         self.link_ttl_seconds = link_ttl_seconds
         self.link_attempt_limit = link_attempt_limit
@@ -348,6 +355,86 @@ class HealthConnectService:
             error_count + read_error_count,
         )
 
+    async def sync_sleep(
+        self,
+        token: str,
+        sleep: HealthConnectSleep,
+        *,
+        moment: datetime | None = None,
+    ) -> SleepSyncResult:
+        now = moment or datetime.now(UTC)
+        self._validate_sleep(sleep, now)
+        external_id = sleep.external_id.strip()
+        try:
+            return await self._persist_sleep(
+                token, sleep, external_id=external_id, moment=now, allow_create=True
+            )
+        except IntegrityError:
+            return await self._persist_sleep(
+                token, sleep, external_id=external_id, moment=now, allow_create=False
+            )
+
+    async def _persist_sleep(
+        self,
+        token: str,
+        sleep: HealthConnectSleep,
+        *,
+        external_id: str,
+        moment: datetime,
+        allow_create: bool,
+    ) -> SleepSyncResult:
+        async with self.session_factory.begin() as session:
+            device = await self._authorize(session, token)
+            repository = HealthConnectRepository(session)
+            summary = await repository.sleep_summary(device.id, external_id, for_update=True)
+            created = summary is None
+            if summary is None:
+                if not allow_create:
+                    raise HealthConnectError(
+                        "Не удалось сохранить sleep summary.", code="PERSISTENCE_CONFLICT"
+                    )
+                summary = HealthConnectSleepSummary(
+                    device_id=device.id,
+                    user_id=device.user_id,
+                    external_id=external_id,
+                    synced_at=moment,
+                )
+                repository.add(summary)
+            summary.started_at = self._optional_utc(sleep.started_at)
+            summary.ended_at = self._optional_utc(sleep.ended_at)
+            summary.duration_sec = sleep.duration_sec
+            summary.sleep_quality = sleep.sleep_quality
+            summary.data_origin = (
+                sleep.data_origin.strip() if sleep.data_origin is not None else None
+            )
+            summary.observed_at = self._optional_utc(sleep.observed_at)
+            summary.synced_at = moment
+            await session.flush()
+            return SleepSyncResult(summary.id, created)
+
+    async def sleep_prefill_for_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        moment: datetime | None = None,
+    ) -> SleepPrefill | None:
+        now = moment or datetime.now(UTC)
+        async with self.session_factory() as session:
+            summary = await HealthConnectRepository(session).fresh_sleep_prefill(
+                user_id,
+                ended_from=now - timedelta(hours=36),
+                ended_through=now,
+            )
+            if summary is None or summary.ended_at is None or summary.duration_sec is None:
+                return None
+            return SleepPrefill(
+                summary.id,
+                summary.duration_sec,
+                self._as_utc(summary.ended_at),
+                summary.sleep_quality,
+                summary.data_origin,
+            )
+
     async def _sync_item(
         self, user_id: uuid.UUID, run: HealthConnectRun, *, create_outbox: bool
     ) -> SyncItemResult:
@@ -445,6 +532,7 @@ class HealthConnectService:
                 )
                 activity_repository.add(activity)
                 await session.flush()
+                await self.recommendation_lifecycle.activity_recorded(session, user_id, activity)
                 for split in normalized.splits or build_splits(
                     normalized.distance_m, normalized.elapsed_time_sec
                 ):
@@ -608,6 +696,37 @@ class HealthConnectService:
         if device.token_scope != DeviceScope.HEALTH_CONNECT_SYNC:
             raise HealthConnectError("Device token не имеет нужного scope.", code="INVALID_SCOPE")
         return device
+
+    @classmethod
+    def _validate_sleep(cls, sleep: HealthConnectSleep, moment: datetime) -> None:
+        external_id = sleep.external_id.strip()
+        if not external_id or len(external_id) > 255:
+            raise HealthConnectError("Некорректный sleep external ID.", code="INVALID_SLEEP")
+        if sleep.duration_sec is not None and not 1 <= sleep.duration_sec <= 86_400:
+            raise HealthConnectError("Некорректная длительность сна.", code="INVALID_SLEEP")
+        if sleep.sleep_quality is not None and not 1 <= sleep.sleep_quality <= 5:
+            raise HealthConnectError("Некорректное качество сна.", code="INVALID_SLEEP")
+        if sleep.data_origin is not None and (
+            not sleep.data_origin.strip() or len(sleep.data_origin.strip()) > 255
+        ):
+            raise HealthConnectError("Некорректный источник сна.", code="INVALID_SLEEP")
+        for value in (sleep.started_at, sleep.ended_at, sleep.observed_at):
+            if value is not None and value.tzinfo is None:
+                raise HealthConnectError(
+                    "Sleep timestamp должен иметь timezone.", code="INVALID_SLEEP"
+                )
+        if (
+            sleep.started_at is not None
+            and sleep.ended_at is not None
+            and sleep.ended_at <= sleep.started_at
+        ):
+            raise HealthConnectError("Некорректный интервал сна.", code="INVALID_SLEEP")
+        if sleep.ended_at is not None and sleep.ended_at > moment + timedelta(minutes=5):
+            raise HealthConnectError("Sleep session ещё не завершена.", code="INVALID_SLEEP")
+
+    @staticmethod
+    def _optional_utc(value: datetime | None) -> datetime | None:
+        return None if value is None else value.astimezone(UTC)
 
     @staticmethod
     def _validate_samples(normalized: NormalizedActivity) -> None:

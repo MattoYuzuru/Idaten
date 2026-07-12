@@ -54,8 +54,6 @@ spec:
               value: "600"
             - name: HEALTH_CONNECT_MAX_BATCH_SIZE
               value: "25"
-            - name: LLM_PROVIDER
-              value: NONE
             - name: LOG_LEVEL
               value: INFO
             - name: OUTBOX_POLL_SECONDS

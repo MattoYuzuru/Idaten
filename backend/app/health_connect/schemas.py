@@ -101,3 +101,29 @@ class DeviceSummary:
     model: str | None
     revoked: bool
     last_sync_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class HealthConnectSleep:
+    external_id: str
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    duration_sec: int | None = None
+    sleep_quality: int | None = None
+    data_origin: str | None = None
+    observed_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SleepSyncResult:
+    summary_id: uuid.UUID
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SleepPrefill:
+    summary_id: uuid.UUID
+    duration_sec: int
+    ended_at: datetime
+    sleep_quality: int | None
+    data_origin: str | None

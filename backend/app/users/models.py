@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -12,9 +12,8 @@ class User(TimestampMixin, Base):
     display_name: Mapped[str] = mapped_column(String(255))
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
     locale: Mapped[str] = mapped_column(String(16), default="ru")
-    external_processing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    assisted_input_consent_version: Mapped[str | None] = mapped_column(String(32))
-    assisted_input_consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    external_ai_consent_version: Mapped[str | None] = mapped_column(String(32))
+    external_ai_consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class TelegramAccount(Base):

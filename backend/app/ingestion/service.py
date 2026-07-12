@@ -22,6 +22,7 @@ from app.analytics.metrics import (
     format_local_week_period,
     local_week_bounds,
 )
+from app.coach.lifecycle import RecommendationLifecycle
 from app.coach.report_builder import build_after_run_report
 from app.ingestion.adapters.registry import AdapterRegistry
 from app.ingestion.adapters.track import build_splits
@@ -57,6 +58,7 @@ class ImportService:
         session_factory: async_sessionmaker[AsyncSession],
         user_service: UserService,
         storage: StorageService,
+        recommendation_lifecycle: RecommendationLifecycle | None = None,
         *,
         max_upload_bytes: int,
         max_archive_uncompressed_bytes: int,
@@ -66,6 +68,7 @@ class ImportService:
         self.session_factory = session_factory
         self.user_service = user_service
         self.storage = storage
+        self.recommendation_lifecycle = recommendation_lifecycle or RecommendationLifecycle()
         self.registry = AdapterRegistry()
         self.max_upload_bytes = max_upload_bytes
         self.max_archive_uncompressed_bytes = max_archive_uncompressed_bytes
@@ -263,6 +266,7 @@ class ImportService:
             )
             activity_repository.add(activity)
             await session.flush()
+            await self.recommendation_lifecycle.activity_recorded(session, user.id, activity)
             splits = normalized.splits or build_splits(
                 normalized.distance_m, normalized.elapsed_time_sec
             )

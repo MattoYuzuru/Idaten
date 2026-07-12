@@ -15,10 +15,6 @@ class BuiltReport:
 def build_after_run_report(
     activity: ActivitySummary, week: AggregateStats, week_period: str
 ) -> BuiltReport:
-    easy_min_km = max(2, round(activity.distance_m / 1000 * 0.7))
-    easy_max_km = max(easy_min_km + 1, round(activity.distance_m / 1000 * 0.8))
-    easy_pace_min = activity.avg_pace_sec_per_km + 30
-    easy_pace_max = activity.avg_pace_sec_per_km + 65
     facts: dict[str, object] = {
         "calculator_version": CALCULATOR_VERSION,
         "rule_version": RULE_VERSION,
@@ -35,11 +31,7 @@ def build_after_run_report(
         },
     }
     rules: dict[str, object] = {
-        "next_workout": {
-            "type": "EASY",
-            "distance_km": f"{easy_min_km}–{easy_max_km}",
-            "pace": f"{format_pace(easy_pace_min)}–{format_pace(easy_pace_max)}",
-        },
+        "next_action": "OPEN_NEXT_FLOW",
         "rule_version": RULE_VERSION,
     }
     message = (
@@ -48,9 +40,8 @@ def build_after_run_report(
         f"{format_duration(activity.elapsed_time_sec)} · "
         f"<b>{format_pace(activity.avg_pace_sec_per_km)}/км</b>\n\n"
         f"Это {week.run_count}-я пробежка на неделе {week_period}. "
-        f"Недельный объем: {week.distance_m / 1000:.2f} км.\n"
-        f"Следующую лучше сделать легкой: {easy_min_km}–{easy_max_km} км в темпе "
-        f"{format_pace(easy_pace_min)}–{format_pace(easy_pace_max)}/км."
+        f"Недельный объем: {week.distance_m / 1000:.2f} км.\n\n"
+        "Следующую пробежку можно рассчитать отдельно через /next."
     )
     return BuiltReport(
         message=message,

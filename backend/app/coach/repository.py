@@ -5,7 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.activities.models import CoachReport
-from app.coach.models import PlannedWorkout, TrainingPlan
+from app.coach.models import (
+    NextRunRecommendation,
+    PlannedWorkout,
+    RecommendationStatus,
+    TrainingPlan,
+)
 
 
 class CoachRepository:
@@ -31,3 +36,41 @@ class CoachRepository:
 
     async def report(self, report_id: uuid.UUID) -> CoachReport | None:
         return await self.session.get(CoachReport, report_id)
+
+    async def current_recommendation(
+        self, user_id: uuid.UUID, *, for_update: bool = False
+    ) -> NextRunRecommendation | None:
+        statement = select(NextRunRecommendation).where(
+            NextRunRecommendation.user_id == user_id,
+            NextRunRecommendation.status.in_(
+                (RecommendationStatus.PROVISIONAL, RecommendationStatus.CONFIRMED)
+            ),
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return (await self.session.execute(statement)).scalar_one_or_none()
+
+    async def recommendation_by_check_in(
+        self, check_in_id: uuid.UUID
+    ) -> NextRunRecommendation | None:
+        result = await self.session.execute(
+            select(NextRunRecommendation).where(NextRunRecommendation.check_in_id == check_in_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def recommendation_by_idempotency(
+        self, user_id: uuid.UUID, key: str
+    ) -> NextRunRecommendation | None:
+        result = await self.session.execute(
+            select(NextRunRecommendation).where(
+                NextRunRecommendation.user_id == user_id,
+                NextRunRecommendation.idempotency_key == key,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def recommendation(self, recommendation_id: uuid.UUID) -> NextRunRecommendation | None:
+        return await self.session.get(NextRunRecommendation, recommendation_id)
+
+    def add_recommendation(self, recommendation: NextRunRecommendation) -> None:
+        self.session.add(recommendation)

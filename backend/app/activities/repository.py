@@ -27,6 +27,8 @@ from app.analytics.personal import (
     ResultCandidate,
     WeeklyProgress,
 )
+from app.readiness.domain import CheckInPhase, CheckInStatus
+from app.readiness.models import ReadinessCheckIn
 
 
 class ActivityRepository:
@@ -162,16 +164,28 @@ class ActivityRepository:
     async def run_history(
         self, user_id: uuid.UUID, *, started_before: datetime | None = None
     ) -> tuple[RunHistoryItem, ...]:
-        statement = select(Activity).where(
+        session_rpe = (
+            select(ReadinessCheckIn.session_rpe)
+            .where(
+                ReadinessCheckIn.linked_activity_id == Activity.id,
+                ReadinessCheckIn.phase == CheckInPhase.POST_RUN,
+                ReadinessCheckIn.status == CheckInStatus.CONFIRMED,
+                ReadinessCheckIn.session_rpe.is_not(None),
+            )
+            .order_by(ReadinessCheckIn.confirmed_at.desc(), ReadinessCheckIn.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        statement = select(Activity, session_rpe).where(
             Activity.user_id == user_id,
             Activity.activity_type == ActivityType.RUN,
             Activity.deleted_at.is_(None),
         )
         if started_before is not None:
             statement = statement.where(Activity.started_at <= started_before)
-        activities = (
-            (await self.session.execute(statement.order_by(Activity.started_at))).scalars().all()
-        )
+        rows = (
+            await self.session.execute(statement.order_by(Activity.started_at, Activity.id))
+        ).all()
         return tuple(
             RunHistoryItem(
                 activity_id=activity.id,
@@ -182,8 +196,14 @@ class ActivityRepository:
                 title=activity.title,
                 source_type=activity.source_type,
                 start_time_known=activity.start_time_known,
+                moving_time_sec=activity.moving_time_sec,
+                avg_hr=activity.avg_hr,
+                max_hr=activity.max_hr,
+                avg_cadence_spm=activity.avg_cadence_spm,
+                elevation_gain_m=activity.elevation_gain_m,
+                session_rpe=rpe,
             )
-            for activity in activities
+            for activity, rpe in rows
         )
 
     async def active_manual_draft(self, user_id: uuid.UUID) -> ManualActivityDraft | None:

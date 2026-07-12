@@ -5,7 +5,8 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.activities.models import DraftInputMethod, SourceType
+from app.activities.domain import SourceType
+from app.activities.models import DraftInputMethod
 
 
 class ActivityInputError(ValueError):
@@ -78,6 +79,12 @@ class RunHistoryItem:
     title: str | None
     source_type: SourceType
     start_time_known: bool = True
+    moving_time_sec: int | None = None
+    avg_hr: int | None = None
+    max_hr: int | None = None
+    avg_cadence_spm: int | None = None
+    elevation_gain_m: int | None = None
+    session_rpe: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

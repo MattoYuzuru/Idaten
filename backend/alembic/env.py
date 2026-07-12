@@ -11,9 +11,11 @@ from app.coach import models as coach_models  # noqa: F401
 from app.core.config import get_settings
 from app.db.alembic import escape_config_percent
 from app.db.base import Base
+from app.goals import models as goal_models  # noqa: F401
 from app.groups import models as group_models  # noqa: F401
 from app.health_connect import models as health_connect_models  # noqa: F401
 from app.ingestion import models as ingestion_models  # noqa: F401
+from app.readiness import models as readiness_models  # noqa: F401
 from app.users import models as user_models  # noqa: F401
 
 config = context.config
