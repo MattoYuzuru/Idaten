@@ -2,13 +2,31 @@
 
 ## Статус документа
 
-- Статус: **approved for implementation; реализация не начата**.
+- Статус: **реализовано локально; publication gate в процессе**.
 - Продуктовые defaults подтверждены владельцем 12 июля 2026 года и зафиксированы в
   разделе 18.
 - Baseline: `main`/`v0.9.1`, commit `b38367a`, Alembic head `20260711_0007`.
 - Последний CI на `main`: run `29168820885`, успешно завершён 11 июля 2026 года.
 - До первого изменения кода нужно добавить новые ADR из раздела 11; повторное
   продуктовое согласование перечисленных defaults не требуется.
+
+### Фактическое состояние реализации — 12 июля 2026 года
+
+- Ветка `codex/mvp-1.0-implementation` содержит ADR-015–018 и slices 1–10: goals,
+  readiness, adaptive engine, recommendation lifecycle, Telegram `/next`, unified AI
+  input и optional Health Connect sleep. Alembic head — `20260712_0012`.
+- Локально прошли Ruff format/check, strict mypy, 157 backend pytest, PostgreSQL 17 clean
+  upgrade, schema check, downgrade `0012 -> 0007`, повторный upgrade/check, 29 Android
+  unit tests, Spotless, debug assembly/lint, provisioning tests и `docker compose config`.
+- Clean `docker compose build` на этой workstation блокируется до запуска приложения:
+  `pip install .` не может скачать `hatchling` из-за
+  `SSLCertVerificationError: self-signed certificate in certificate chain`. Проверка TLS
+  не отключалась. Поэтому Compose up/migrate/health/ready локально не отмечены
+  успешными; clean image build и runtime smoke обязательны в GitHub CI.
+- Live OpenAI, physical-device Health Connect и Telegram UX остаются ручным checklist из
+  `docs/deployment.md`; owner-controlled key/input и реальные health data локально не
+  использовались.
+- Draft PR и GitHub CI создаются только после явного разрешения на external write.
 
 Этот документ самодостаточен для следующего coding-агента. Исходное большое задание не
 должно требоваться повторно, но устойчивые правила из `AGENTS.md`,
